@@ -1,8 +1,11 @@
 node_modules/
-build/
 dist/
 coverage/
 .DS_Store
 *.log
 .env*
 !.env.example
+
+# Desktop build outputs
+electron/server.mjs
+release/

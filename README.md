@@ -90,6 +90,22 @@ Tests for the evidence verifier (they use the small sample PDF in `server/fixtur
 npm test
 ```
 
+## Windows desktop app (installer)
+
+`PaperMind-AI-Setup.exe` installs PaperMind AI as a desktop program that runs **fully offline** on the local Ollama engine:
+
+1. It installs the app and creates Desktop and Start Menu shortcuts.
+2. If Ollama is not installed, it downloads and installs it silently.
+3. It downloads the AI model (`qwen2.5:7b`, about 4.7 GB) and shows a progress window.
+
+When the app starts, it launches Ollama if needed and opens PaperMind AI in its own window. The server listens only on `127.0.0.1`, so papers never leave the computer.
+
+**Get the installer:** GitHub Actions builds it on Windows for every push to `main`. Open the repository's **Actions** tab, select the latest *Build Windows installer* run, and download `PaperMind-AI-Setup` under **Artifacts**. Pushing a tag such as `v1.0.0` also attaches the installer to a GitHub Release.
+
+Build it yourself on Windows with `npm ci`, then `npm run dist:win`. The output goes to `release/`. To try the desktop app without installing it, run `npm run desktop`.
+
+Requirements for the model: about 8 GB of RAM and 6 GB of free disk space. A GPU makes analysis much faster but is not required.
+
 ## Deploy (free) on Render
 
 1. Sign in at <https://render.com> with GitHub.

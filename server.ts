@@ -1,5 +1,4 @@
 import express from 'express';
-import { createServer as createViteServer } from 'vite';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
@@ -427,21 +426,33 @@ RULES:
 
   // Mount Vite or serve static files
   if (!isProd) {
+    // Loaded only in development, so production builds (and the desktop app) do not need Vite.
+    const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: 'spa',
     });
     app.use(vite.middlewares);
   } else {
-    app.use(express.static(path.join(__dirname, 'dist')));
+    // PAPERMIND_DIST lets the desktop app point at the bundled frontend.
+    const distDir = process.env.PAPERMIND_DIST || path.join(__dirname, 'dist');
+    app.use(express.static(distDir));
     app.get('*', (_req, res) => {
-      res.sendFile(path.join(__dirname, 'dist', 'index.html'));
+      res.sendFile(path.join(distDir, 'index.html'));
     });
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`PaperMind AI full-stack server running on http://0.0.0.0:${PORT}`);
+  // The desktop app binds to 127.0.0.1 so the server is reachable only from this computer.
+  const HOST = process.env.HOST || '0.0.0.0';
+  return new Promise<number>((resolve) => {
+    const server = app.listen(PORT, HOST, () => {
+      const address = server.address();
+      const port = typeof address === 'object' && address ? address.port : PORT;
+      console.log(`PaperMind AI full-stack server running on http://${HOST}:${port}`);
+      resolve(port);
+    });
   });
 }
 
-startServer();
+/** Resolves with the port once the server is listening (used by the desktop app). */
+export const serverReady = startServer();

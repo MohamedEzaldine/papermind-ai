@@ -10,5 +10,9 @@ services:
     envVars:
       - key: NODE_VERSION
         value: "22"
+      - key: ELECTRON_SKIP_BINARY_DOWNLOAD # the web server does not need the desktop runtime
+        value: "1"
+      - key: AI_PROVIDER
+        value: gemini
       - key: GEMINI_API_KEY
         sync: false # entered privately in the Render dashboard
