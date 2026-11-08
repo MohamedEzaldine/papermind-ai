@@ -1,5 +1,6 @@
 import * as XLSX from 'xlsx';
 import { AnalysisResult, Language } from '../types';
+import { evidenceLabel, numbersWarning } from './evidence';
 
 export function exportToExcel(data: AnalysisResult, lang: Language) {
   const isAr = lang === 'ar';
@@ -75,6 +76,8 @@ export function exportToExcel(data: AnalysisResult, lang: Language) {
           [isAr ? 'رقم الصفحة' : 'Page']: `${isAr ? 'ص. ' : 'p. '}${point.page}`,
           [isAr ? 'نوع الدليل' : 'Type']: typeLabel,
           [isAr ? 'الاقتباس الداعم' : 'Quote']: point.quote || '-',
+          [isAr ? 'التحقق من الدليل' : 'Evidence Check']:
+            [evidenceLabel(point.evidence, lang)?.label, numbersWarning(point.evidence, lang)].filter(Boolean).join(' | ') || '-',
         });
       });
     }
@@ -89,6 +92,7 @@ export function exportToExcel(data: AnalysisResult, lang: Language) {
     { wch: 10 }, // Page
     { wch: 16 }, // Type
     { wch: 55 }, // Quote
+    { wch: 40 }, // Evidence check
   ];
 
   // 3. Create Workbook and Append Sheets

@@ -4,6 +4,15 @@ export type EvidenceType = 'explicit' | 'inferred';
 
 export type PointCategory = 'general' | 'strength' | 'weakness';
 
+export type EvidenceStatus = 'verified' | 'page_corrected' | 'not_found' | 'no_quote';
+
+/** Server-side check of a point against the real text of the PDF. */
+export interface EvidenceCheck {
+  status: EvidenceStatus;
+  citedPage?: number;
+  unmatchedNumbers?: string[];
+}
+
 export interface AnalysisPoint {
   id: string;
   text: string;
@@ -11,6 +20,7 @@ export interface AnalysisPoint {
   type: EvidenceType;
   quote?: string;
   category?: PointCategory;
+  evidence?: EvidenceCheck;
 }
 
 export interface AnalysisSection {
@@ -37,6 +47,7 @@ export interface AnalysisResult {
   fileSize: string;
   analyzedAt: string;
   language: Language;
+  pageCount?: number;
 }
 
 export interface ChatMessage {

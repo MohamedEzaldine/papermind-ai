@@ -1,0 +1,14 @@
+# One-click deployment on Render (https://render.com) as a free Node web service.
+services:
+  - type: web
+    name: papermind-ai
+    runtime: node
+    plan: free
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    healthCheckPath: /
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: GEMINI_API_KEY
+        sync: false # entered privately in the Render dashboard

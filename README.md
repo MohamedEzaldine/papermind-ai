@@ -1,0 +1,95 @@
+# PaperMind AI
+
+**Understand any research paper — deeply, with evidence.**
+**افهم أي ورقة بحثية بعمق، وبالدليل الموثّق.**
+
+PaperMind AI is a bilingual (Arabic / English) web app that analyzes one research paper (PDF) at a time from any scientific discipline. It produces a structured, peer-review-style analysis in which every point cites its page, and then automatically checks that evidence against the real text of the PDF.
+
+> Graduation project, AI Ambassadors Program. The first version was generated with Google AI Studio (Build), then extended in this repository.
+
+## Features
+
+- **Landing page** that explains the problem, the features and how the app works.
+- **PDF upload** with drag-and-drop (one file, up to 20 MB). Scanned PDFs without selectable text are detected and rejected with a clear message.
+- **10-section analysis dashboard**:
+  1. Overview
+  2. Research problem & gap
+  3. Objectives, questions & hypotheses
+  4. Contributions
+  5. Methodology
+  6. Data, tools & models
+  7. Results & discussion
+  8. Limitations
+  9. Critical evaluation (strengths and weaknesses)
+  10. Future research
+- **Evidence labels** on every point: the page number, plus *Explicit* (stated in the paper) or *Inferred* (AI interpretation), with a supporting quote.
+- **Automatic evidence verification**, added in this repository:
+  - The server extracts the text of every page and looks for each quote.
+  - **Quote verified**: the quote was found on the cited page.
+  - **Page corrected**: the quote was found on another page, and the page number was fixed automatically.
+  - **Check manually**: the quote was not found word for word in the PDF text.
+  - Numbers in *Explicit* points that do not appear anywhere in the paper are flagged, for example swapped or invented counts.
+  - A summary bar shows the share of quotes that were verified.
+- **Ask the Paper**: a Q&A chat that answers only from the paper, cites pages, and keeps the conversation context.
+- **Export**: an Excel workbook (Overview and Analysis sheets, including the evidence-check column) and a print-ready PDF report with correct Arabic RTL.
+- **Arabic and English interface** with full RTL support, a dark mode, and a responsive layout.
+- **Secure key handling**: the Gemini API key lives only on the server (`server.ts`) and is never sent to the browser.
+
+## Architecture
+
+```
+Browser (React + Vite + Tailwind)
+   │  PDF as base64
+   ▼
+Express server (server.ts)
+   ├─ unpdf: extract the text of each page  ──┐
+   ├─ Gemini: structured JSON analysis        │
+   └─ server/evidence.ts: verify quotes, pages and numbers ◄┘
+```
+
+| Path | Purpose |
+|---|---|
+| `server.ts` | API routes `/api/analyze` and `/api/chat`; also serves the built frontend |
+| `server/evidence.ts` | Evidence verification: page text extraction, quote matching, number checks |
+| `server/evidence.test.ts` | Tests for the verifier |
+| `src/components/` | Landing, Upload, Dashboard, Ask-the-Paper drawer, Header |
+| `src/utils/` | Excel export and evidence labels |
+| `src/locales/translations.ts` | Arabic and English UI text |
+
+## Run locally
+
+Requirements: Node.js 20 or newer, and a free Gemini API key from <https://aistudio.google.com/apikey>.
+
+```bash
+npm install
+cp .env.example .env      # then put your key in .env
+npm run dev               # http://localhost:3000
+```
+
+Production build:
+
+```bash
+npm run build
+npm start
+```
+
+Tests for the evidence verifier (they use the small sample PDF in `server/fixtures/`):
+
+```bash
+npm test
+```
+
+## Deploy (free) on Render
+
+1. Sign in at <https://render.com> with GitHub.
+2. Choose **New → Blueprint** and select this repository. Render reads `render.yaml`.
+3. When asked, paste your `GEMINI_API_KEY`. It is stored privately in Render.
+4. Wait for the build. Your public link looks like `https://papermind-ai.onrender.com`.
+
+On Render's free plan the app sleeps after a period of inactivity, so the first visit after that can take about a minute to load.
+
+## Limitations
+
+- Evidence verification matches the PDF's text layer. Quotes taken from tables, figures or equations may show **Check manually** even when they are correct.
+- One paper is analyzed at a time, and analysis quality depends on the Gemini model.
+- The analysis supports reading; it does not replace reading the paper.

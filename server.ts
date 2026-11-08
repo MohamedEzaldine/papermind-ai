@@ -4,6 +4,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 import { GoogleGenAI, Type } from '@google/genai';
+import { extractPaperText, checkPoint, PaperText } from './server/evidence';
 
 dotenv.config();
 
@@ -19,7 +20,12 @@ async function startServer() {
   app.use(express.json({ limit: '35mb' }));
   app.use(express.urlencoded({ extended: true, limit: '35mb' }));
 
-  // Initialize shared Gemini client
+  const MODEL = process.env.GEMINI_MODEL || 'gemini-3.8-flash';
+  if (!process.env.GEMINI_API_KEY) {
+    console.warn('WARNING: GEMINI_API_KEY is not set. Analysis and Q&A requests will fail until it is configured.');
+  }
+
+  // Initialize shared Gemini client (the key stays on the server and is never sent to the browser)
   const ai = new GoogleGenAI({
     apiKey: process.env.GEMINI_API_KEY,
     httpOptions: {
@@ -71,15 +77,17 @@ async function startServer() {
                   page: { type: Type.INTEGER, description: 'Exact page number in the PDF where evidence is found (integer starting at 1)' },
                   type: {
                     type: Type.STRING,
+                    enum: ['explicit', 'inferred'],
                     description: '"explicit" if directly stated in text, "inferred" if an analytical synthesis/critique',
                   },
                   quote: { type: Type.STRING, description: 'Exact short verbatim supporting quote (1-2 sentences) from the paper' },
                   category: {
                     type: Type.STRING,
+                    enum: ['general', 'strength', 'weakness'],
                     description: 'For section 9 (Critical Evaluation): "strength" or "weakness". Otherwise "general"',
                   },
                 },
-                required: ['text', 'page', 'type'],
+                required: ['text', 'page', 'type', 'quote', 'category'],
               },
             },
           },
@@ -104,6 +112,29 @@ async function startServer() {
 
       const isArabic = language === 'ar';
 
+      if (!process.env.GEMINI_API_KEY) {
+        return res.status(503).json({
+          error: isArabic
+            ? 'لم يتم إعداد مفتاح Gemini على الخادم بعد. يرجى التواصل مع مسؤول التطبيق.'
+            : 'The Gemini API key is not configured on the server yet. Please contact the app administrator.',
+        });
+      }
+
+      // Extract the real text of every page so the AI's evidence can be verified afterwards.
+      let paperText: PaperText | null = null;
+      try {
+        paperText = await extractPaperText(Buffer.from(cleanBase64, 'base64'));
+      } catch (e) {
+        console.warn('PDF text extraction failed; evidence verification skipped:', e);
+      }
+      if (paperText && paperText.rawCharCount < 200) {
+        return res.status(422).json({
+          error: isArabic
+            ? 'يبدو أن هذا الملف ممسوح ضوئياً (صور بدون نص قابل للقراءة). يرجى رفع نسخة PDF نصية من الورقة.'
+            : 'This PDF looks scanned (images without selectable text). Please upload a text-based PDF of the paper.',
+        });
+      }
+
       const systemInstruction = `You are an elite academic peer reviewer and research scientist in the PaperMind AI system.
 Your mission is to perform a rigorous, deep, evidence-backed evaluation of the attached research paper PDF.
 
@@ -125,7 +156,8 @@ CRITICAL INSTRUCTIONS:
 5. EXPLICIT VS INFERRED:
    - "explicit": verbatim claim or stated fact directly in the text.
    - "inferred": peer-reviewer interpretation, analytical synthesis, or critical evaluation.
-6. QUOTES: Provide a short, direct verbatim quote (1-2 sentences) from the paper backing each point.
+6. QUOTES: Provide a short, direct verbatim quote (1-2 sentences) copied character-for-character from the paper, in the paper's original language, backing each point. Never translate or paraphrase the quote. The quote must appear on the cited page.
+   NUMBERS: Copy every number exactly as printed, and keep each number attached to its correct label (e.g. which class, model or group it belongs to). Re-read tables before reporting counts or metrics; do not swap values between categories. Do not compute new numbers and label them "explicit".
 7. MISSING SECTIONS: If a section is genuinely not addressed anywhere in the paper, set isNotStated to true, and in points put one point with text: "${isArabic ? 'غير مذكور في الورقة البحثية' : 'Not stated in the paper'}", page: 1, type: "inferred".`;
 
       const promptText = isArabic
@@ -133,7 +165,7 @@ CRITICAL INSTRUCTIONS:
         : 'Analyze this research paper deeply with rigorous scientific evaluation, page-level evidence, and structured output as specified.';
 
       const response = await ai.models.generateContent({
-        model: 'gemini-3.8-flash',
+        model: MODEL,
         contents: [
           {
             role: 'user',
@@ -172,19 +204,25 @@ CRITICAL INSTRUCTIONS:
           key: `section_${sec.id || index + 1}`,
           title: sec.title,
           isNotStated: !!sec.isNotStated,
-          points: (sec.points || []).map((pt: any, ptIdx: number) => ({
-            id: `pt_${sec.id || index + 1}_${ptIdx + 1}`,
-            text: pt.text,
-            page: typeof pt.page === 'number' && pt.page > 0 ? pt.page : 1,
-            type: pt.type === 'explicit' ? 'explicit' : 'inferred',
-            quote: pt.quote || undefined,
-            category: pt.category || (sec.id === 9 ? (ptIdx % 2 === 0 ? 'strength' : 'weakness') : 'general'),
-          })),
+          points: (sec.points || []).map((pt: any, ptIdx: number) => {
+            const base = {
+              id: `pt_${sec.id || index + 1}_${ptIdx + 1}`,
+              text: pt.text,
+              page: typeof pt.page === 'number' && pt.page > 0 ? pt.page : 1,
+              type: pt.type === 'explicit' ? 'explicit' : 'inferred',
+              quote: pt.quote || undefined,
+              category: ['strength', 'weakness'].includes(pt.category) ? pt.category : 'general',
+            };
+            if (!paperText || sec.isNotStated) return base;
+            const { check, page } = checkPoint(paperText, base);
+            return { ...base, page, evidence: check };
+          }),
         })),
         fileName,
         fileSize,
         analyzedAt: new Date().toISOString(),
         language,
+        pageCount: paperText?.pages.length,
       };
 
       return res.json(result);
@@ -227,41 +265,38 @@ RULES:
    Never speculate, guess, or use external knowledge not found in the PDF.
 4. TONE: Clear, concise, scholarly, and objective.`;
 
-      const contents: any[] = [];
-
-      // Include PDF in the first turn or context
-      if (pdfBase64) {
-        const cleanBase64 = pdfBase64.replace(/^data:application\/pdf;base64,/, '');
-        contents.push({
-          role: 'user',
-          parts: [
-            {
-              inlineData: {
-                mimeType: 'application/pdf',
-                data: cleanBase64,
-              },
-            },
-            {
-              text: `This is the research paper to examine. Conversation begins below.\nUser: ${question}`,
-            },
-          ],
-        });
-      } else {
-        // Fallback if paper text or previous turns
-        for (const msg of messages) {
-          contents.push({
-            role: msg.role === 'model' ? 'model' : 'user',
-            parts: [{ text: msg.text }],
-          });
-        }
-        contents.push({
-          role: 'user',
-          parts: [{ text: question }],
+      if (!process.env.GEMINI_API_KEY) {
+        return res.status(503).json({
+          error: isArabic ? 'لم يتم إعداد مفتاح Gemini على الخادم بعد.' : 'The Gemini API key is not configured on the server yet.',
         });
       }
 
+      // The paper goes first, followed by the whole conversation so follow-up questions keep their context.
+      const contents: any[] = [];
+      const history = (Array.isArray(messages) ? messages : []).slice(-20);
+      const paperPart = pdfBase64
+        ? [
+            {
+              inlineData: {
+                mimeType: 'application/pdf',
+                data: pdfBase64.replace(/^data:application\/pdf;base64,/, ''),
+              },
+            },
+            { text: 'This is the research paper to examine. Answer the questions that follow using only this paper.' },
+          ]
+        : [];
+      if (paperPart.length) {
+        contents.push({ role: 'user', parts: paperPart });
+        contents.push({ role: 'model', parts: [{ text: isArabic ? 'تمت قراءة الورقة. تفضل بسؤالك.' : 'I have read the paper. Please ask your question.' }] });
+      }
+      for (const msg of history) {
+        if (!msg?.text) continue;
+        contents.push({ role: msg.role === 'model' ? 'model' : 'user', parts: [{ text: String(msg.text) }] });
+      }
+      contents.push({ role: 'user', parts: [{ text: question }] });
+
       const response = await ai.models.generateContent({
-        model: 'gemini-3.8-flash',
+        model: MODEL,
         contents,
         config: {
           systemInstruction,

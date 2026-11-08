@@ -20,7 +20,11 @@ import {
   Tag,
   CheckCircle2,
   HelpCircle,
+  ShieldCheck,
+  ShieldAlert,
+  AlertTriangle,
 } from 'lucide-react';
+import { evidenceLabel, numbersWarning, verificationSummary } from '../utils/evidence';
 import { AnalysisResult, Language, AnalysisPoint } from '../types';
 import { translations } from '../locales/translations';
 import { exportToExcel } from '../utils/exportExcel';
@@ -136,6 +140,28 @@ export const AnalysisDashboard: React.FC<AnalysisDashboardProps> = ({
                 <span>{t.inferredBadge}</span>
               </span>
             )}
+
+            {/* Evidence verification badge (checked against the real PDF text on the server) */}
+            {(() => {
+              const ev = evidenceLabel(point.evidence, language);
+              if (!ev) return null;
+              const ok = point.evidence?.status !== 'not_found';
+              return (
+                <span
+                  className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md text-xs font-bold border ${
+                    point.evidence?.status === 'verified'
+                      ? 'bg-teal-50 dark:bg-teal-950/60 text-teal-800 dark:text-teal-300 border-teal-200 dark:border-teal-800'
+                      : point.evidence?.status === 'page_corrected'
+                        ? 'bg-sky-50 dark:bg-sky-950/60 text-sky-800 dark:text-sky-300 border-sky-200 dark:border-sky-800'
+                        : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border-slate-300 dark:border-slate-600'
+                  }`}
+                  title={ev.detail}
+                >
+                  {ok ? <ShieldCheck className="w-3 h-3" /> : <ShieldAlert className="w-3 h-3" />}
+                  <span>{ev.label}</span>
+                </span>
+              );
+            })()}
           </div>
 
           {/* Copy Button */}
@@ -156,6 +182,13 @@ export const AnalysisDashboard: React.FC<AnalysisDashboardProps> = ({
         <p className="text-sm sm:text-base text-slate-800 dark:text-slate-200 leading-relaxed font-medium">
           {point.text}
         </p>
+
+        {numbersWarning(point.evidence, language) && (
+          <p className="flex items-start gap-1.5 text-xs font-semibold text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 rounded-lg px-2.5 py-1.5">
+            <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+            <span>{numbersWarning(point.evidence, language)}</span>
+          </p>
+        )}
 
         {/* Supporting Quote (Collapsible) */}
         {point.quote && (
@@ -236,6 +269,43 @@ export const AnalysisDashboard: React.FC<AnalysisDashboardProps> = ({
           </button>
         </div>
       </div>
+
+      {/* Evidence verification summary */}
+      {(() => {
+        const v = verificationSummary(data);
+        if (v.checked === 0) return null;
+        const pct = Math.round(((v.verified + v.corrected) / v.checked) * 100);
+        return (
+          <div className="mb-6 p-4 rounded-2xl border border-teal-200 dark:border-teal-800 bg-teal-50/70 dark:bg-teal-950/30 flex flex-wrap items-center gap-x-6 gap-y-2 text-sm">
+            <div className="flex items-center gap-2 font-bold text-teal-900 dark:text-teal-200">
+              <ShieldCheck className="w-5 h-5 text-[#14B8A6]" />
+              <span>
+                {isAr
+                  ? `التحقق من الأدلة: ${pct}% من الاقتباسات وُجدت في نص الورقة`
+                  : `Evidence check: ${pct}% of quotes were found in the paper text`}
+              </span>
+            </div>
+            <span className="text-teal-800 dark:text-teal-300">
+              {isAr ? `موثّق: ${v.verified}` : `Verified: ${v.verified}`}
+            </span>
+            {v.corrected > 0 && (
+              <span className="text-sky-800 dark:text-sky-300">
+                {isAr ? `صفحات صُححت: ${v.corrected}` : `Pages corrected: ${v.corrected}`}
+              </span>
+            )}
+            {v.notFound > 0 && (
+              <span className="text-slate-600 dark:text-slate-300">
+                {isAr ? `تحتاج مراجعة يدوية: ${v.notFound}` : `Need manual check: ${v.notFound}`}
+              </span>
+            )}
+            {v.numberFlags > 0 && (
+              <span className="text-amber-700 dark:text-amber-300">
+                {isAr ? `نقاط بأرقام غير موجودة في الورقة: ${v.numberFlags}` : `Points with numbers not in the paper: ${v.numberFlags}`}
+              </span>
+            )}
+          </div>
+        );
+      })()}
 
       {/* Top Summary Bar (Paper Dossier Card) */}
       <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-md p-6 sm:p-8 mb-8 print-break-inside-avoid">
@@ -449,7 +519,17 @@ export const AnalysisDashboard: React.FC<AnalysisDashboardProps> = ({
                       </div>
                     </div>
                   </div>
-                ) : (
+                ) : null}
+                {isCriticalEval && (strengths.length > 0 || weaknesses.length > 0) &&
+                  section.points.some((p) => p.category !== 'strength' && p.category !== 'weakness') && (
+                    <div className="space-y-3.5 mt-6">
+                      {section.points
+                        .filter((p) => p.category !== 'strength' && p.category !== 'weakness')
+                        .map(renderPoint)}
+                    </div>
+                  )}
+                {section.isNotStated || section.points.length === 0 ||
+                (isCriticalEval && (strengths.length > 0 || weaknesses.length > 0)) ? null : (
                   /* Standard 1-8 and 10 Sections */
                   <div className="space-y-3.5">
                     {section.points.map(renderPoint)}
