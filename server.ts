@@ -7,6 +7,7 @@ import { extractPaperText, checkPoint, PaperText } from './server/evidence';
 import {
   OLLAMA_HOST,
   OLLAMA_MODEL,
+  OllamaModelMissingError,
   OllamaUnavailableError,
   ollamaChat,
   ollamaStatus,
@@ -47,10 +48,25 @@ async function startServer() {
     }
   }
 
-  const ollamaDownMessage = (ar: boolean) =>
-    ar
-      ? `تعذر الاتصال بـ Ollama على هذا الجهاز. تأكد أن Ollama يعمل وأن النموذج ${OLLAMA_MODEL} مثبت (ollama pull ${OLLAMA_MODEL}).`
-      : `Could not reach Ollama on this machine. Make sure Ollama is running and the model ${OLLAMA_MODEL} is installed (ollama pull ${OLLAMA_MODEL}).`;
+  /** User-facing message for local-engine problems, or null if the error is something else. */
+  const ollamaErrorMessage = (err: any, ar: boolean): string | null => {
+    if (err instanceof OllamaUnavailableError) {
+      return ar
+        ? 'محرك الذكاء الاصطناعي المحلي (Ollama) لا يعمل على هذا الجهاز. افتح برنامج Ollama من قائمة ابدأ ثم أعد المحاولة.'
+        : 'The local AI engine (Ollama) is not running on this computer. Open Ollama from the Start menu, then try again.';
+    }
+    if (err instanceof OllamaModelMissingError) {
+      return ar
+        ? `لا يوجد نموذج ذكاء اصطناعي مثبت في Ollama. ثبّته بالأمر: ollama pull ${OLLAMA_MODEL}`
+        : `No AI model is installed in Ollama. Install one with: ollama pull ${OLLAMA_MODEL}`;
+    }
+    if (/out of memory|requires more system memory|insufficient memory/i.test(err?.message || '')) {
+      return ar
+        ? 'ذاكرة الجهاز (RAM) غير كافية لتشغيل النموذج. أغلق البرامج الأخرى وأعد المحاولة، أو استخدم نموذجاً أصغر مثل qwen2.5:3b.'
+        : 'Not enough memory (RAM) to run the model. Close other programs and retry, or use a smaller model such as qwen2.5:3b.';
+    }
+    return null;
+  };
 
   // Initialize shared Gemini client (the key stays on the server and is never sent to the browser)
   const ai = new GoogleGenAI({
@@ -129,7 +145,7 @@ async function startServer() {
   app.get('/api/health', async (_req, res) => {
     if (PROVIDER === 'ollama') {
       const st = await ollamaStatus();
-      return res.json({ provider: 'ollama', model: OLLAMA_MODEL, ready: st.running && st.modelInstalled, ...st });
+      return res.json({ provider: 'ollama', ready: st.running && st.modelInstalled, ...st });
     }
     return res.json({ provider: 'gemini', model: MODEL, ready: !!process.env.GEMINI_API_KEY });
   });
@@ -202,6 +218,7 @@ CRITICAL INSTRUCTIONS:
 
       let rawJson: string | undefined;
       let truncatedNote: { truncated: boolean; pagesIncluded: number } | undefined;
+      let engineName = `Gemini · ${MODEL}`;
 
       if (PROVIDER === 'ollama') {
         if (!paperText) {
@@ -210,18 +227,21 @@ CRITICAL INSTRUCTIONS:
         // Local models cannot read PDFs, so they get the extracted text with [Page N] markers.
         const paper = paperAsText(paperText.rawPages);
         truncatedNote = { truncated: paper.truncated, pagesIncluded: paper.pagesIncluded };
-        rawJson = await ollamaChat(
+        const local = await ollamaChat(
           [
             {
               role: 'system',
               content:
                 systemInstruction.replace('the attached research paper PDF', 'the research paper text below') +
-                '\n8. The paper text is split by [Page N] markers. Use those numbers as page numbers. Return only JSON matching the schema.',
+                '\n8. The paper text is split by [Page N] markers. Use those numbers as page numbers.' +
+                '\n9. Be concise: give 2 to 4 strong points per section, each 1-2 sentences, with a short quote. Return only JSON matching the schema.',
             },
             { role: 'user', content: `${promptText}\n\n=== PAPER TEXT ===${paper.text}` },
           ],
           toJsonSchema(analysisResponseSchema)
         );
+        rawJson = local.text;
+        engineName = `Ollama · ${local.model}`;
       } else {
         const response = await ai.models.generateContent({
           model: MODEL,
@@ -282,7 +302,7 @@ CRITICAL INSTRUCTIONS:
         analyzedAt: new Date().toISOString(),
         language,
         pageCount: paperText?.pages.length,
-        engine: PROVIDER === 'ollama' ? `Ollama · ${OLLAMA_MODEL}` : `Gemini · ${MODEL}`,
+        engine: engineName,
         truncatedAfterPage: truncatedNote?.truncated ? truncatedNote.pagesIncluded : undefined,
       };
 
@@ -294,8 +314,9 @@ CRITICAL INSTRUCTIONS:
         ? 'حدث خطأ أثناء تحليل الورقة. يرجى التحقق من صحة الملف والمحاولة مجدداً.'
         : 'An error occurred while analyzing the paper. Please verify the PDF and try again.';
 
-      if (err instanceof OllamaUnavailableError || /model .* not found/i.test(err?.message || '')) {
-        message = ollamaDownMessage(isArabic);
+      const localMessage = ollamaErrorMessage(err, isArabic);
+      if (localMessage) {
+        message = localMessage;
       } else if (err?.message?.includes('RESOURCE_EXHAUSTED')) {
         message = isArabic
           ? 'تم تجاوز حد الاستخدام المؤقت للخدمة. يرجى الانتظار لحظات وإعادة المحاولة.'
@@ -367,13 +388,14 @@ RULES:
           );
           paperBlock = `\n\nThe paper text is split by [Page N] markers; cite those page numbers.\n=== PAPER TEXT ===${paperAsText(extracted.rawPages).text}`;
         }
-        replyText = await ollamaChat([
+        const local = await ollamaChat([
           { role: 'system', content: systemInstruction.replace('uploaded research paper PDF', 'research paper text below') + paperBlock },
           ...history
             .filter((m: any) => m?.text)
             .map((m: any) => ({ role: m.role === 'model' ? ('assistant' as const) : ('user' as const), content: String(m.text) })),
           { role: 'user', content: question },
         ]);
+        replyText = local.text;
       } else {
         const response = await ai.models.generateContent({
           model: MODEL,
@@ -415,11 +437,10 @@ RULES:
       console.error('Chat error:', err);
       const isArabic = req.body?.language === 'ar';
       const message =
-        err instanceof OllamaUnavailableError
-          ? ollamaDownMessage(isArabic)
-          : isArabic
+        ollamaErrorMessage(err, isArabic) ??
+        (isArabic
             ? 'حدث خطأ أثناء معالجة السؤال. يرجى المحاولة مرة أخرى.'
-            : 'An error occurred while answering your question. Please try again.';
+            : 'An error occurred while answering your question. Please try again.');
       return res.status(500).json({ error: message, detail: err.message });
     }
   });

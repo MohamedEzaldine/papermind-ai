@@ -6,18 +6,29 @@
  * extracted text of the paper with explicit [Page N] markers. That way the model
  * can still cite page numbers.
  */
+import http from 'node:http';
+import https from 'node:https';
 
 export const OLLAMA_HOST = (process.env.OLLAMA_HOST || 'http://127.0.0.1:11434').replace(/\/$/, '');
+/** Preferred model. If it is not installed, another installed chat model is used instead. */
 export const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'qwen2.5:7b';
-/** Context window requested from Ollama. Papers need far more than Ollama's small default. */
-const NUM_CTX = Number(process.env.OLLAMA_NUM_CTX || 32768);
-/** Upper bound on paper text sent to the model (about 4 characters per token). */
-const MAX_PAPER_CHARS = Number(process.env.OLLAMA_MAX_CHARS || Math.floor(NUM_CTX * 4 * 0.6));
+/** Context window requested from Ollama. Larger is slower on computers without a GPU. */
+const NUM_CTX = Number(process.env.OLLAMA_NUM_CTX || 16384);
+/** Upper bound on paper text sent to the model (about 4 characters per token, leaving room for the answer). */
+const MAX_PAPER_CHARS = Number(process.env.OLLAMA_MAX_CHARS || Math.floor(NUM_CTX * 4 * 0.55));
+
+/** Fallback order when the preferred model is missing (good multilingual / Arabic models first). */
+const PREFERRED_MODELS = [OLLAMA_MODEL, 'qwen2.5:7b', 'qwen2.5:14b', 'qwen2.5:3b', 'qwen3:8b', 'qwen3:4b', 'llama3.1:8b', 'gemma2:9b', 'mistral:7b'];
 
 export interface OllamaMessage {
   role: 'system' | 'user' | 'assistant';
   content: string;
 }
+
+/** Ollama is not running or not reachable. */
+export class OllamaUnavailableError extends Error {}
+/** Ollama is running but has no usable chat model installed. */
+export class OllamaModelMissingError extends Error {}
 
 /** Turn the paper's pages into one text with page markers, trimmed to fit the context window. */
 export function paperAsText(rawPages: string[]): { text: string; truncated: boolean; pagesIncluded: number } {
@@ -54,70 +65,120 @@ export function toJsonSchema(schema: any): any {
   return out;
 }
 
-export class OllamaUnavailableError extends Error {}
+/**
+ * Minimal HTTP client for Ollama built on node:http.
+ * Unlike fetch, it has no header or body timeouts: on a computer without a GPU the model
+ * can need many minutes to read a whole paper before it sends its first byte.
+ */
+function request(
+  path: string,
+  body: object | null,
+  onLine?: (line: string) => void,
+  timeoutMs = 0
+): Promise<{ status: number; text: string }> {
+  return new Promise((resolve, reject) => {
+    const url = new URL(OLLAMA_HOST + path);
+    const lib = url.protocol === 'https:' ? https : http;
+    const payload = body ? JSON.stringify(body) : undefined;
+    const req = lib.request(
+      url,
+      {
+        method: body ? 'POST' : 'GET',
+        headers: payload ? { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) } : {},
+      },
+      (res) => {
+        res.setEncoding('utf8');
+        let text = '';
+        let buffer = '';
+        res.on('data', (chunk: string) => {
+          if (onLine && res.statusCode === 200) {
+            buffer += chunk;
+            let nl: number;
+            while ((nl = buffer.indexOf('\n')) >= 0) {
+              const line = buffer.slice(0, nl).trim();
+              buffer = buffer.slice(nl + 1);
+              if (line) onLine(line);
+            }
+          } else {
+            text += chunk;
+          }
+        });
+        res.on('end', () => {
+          if (onLine && buffer.trim() && res.statusCode === 200) onLine(buffer.trim());
+          resolve({ status: res.statusCode || 0, text });
+        });
+        res.on('error', reject);
+      }
+    );
+    if (timeoutMs > 0) {
+      req.setTimeout(timeoutMs, () => req.destroy(new Error('timeout')));
+    }
+    req.on('error', (e: any) => reject(new OllamaUnavailableError(`Cannot reach Ollama at ${OLLAMA_HOST}: ${e?.code || e?.message || e}`)));
+    if (payload) req.write(payload);
+    req.end();
+  });
+}
 
-/** Check that Ollama is running and the configured model is installed. */
-export async function ollamaStatus(): Promise<{ running: boolean; modelInstalled: boolean; models: string[] }> {
+/** List installed models, or throw OllamaUnavailableError if Ollama is not running. */
+async function installedModels(): Promise<string[]> {
+  const r = await request('/api/tags', null, undefined, 4000);
+  if (r.status !== 200) throw new OllamaUnavailableError(`Ollama responded with ${r.status}`);
+  const data = JSON.parse(r.text || '{}');
+  return (data.models || []).map((m: any) => String(m.name));
+}
+
+const sameModel = (a: string, b: string) =>
+  a === b || a === `${b}:latest` || `${a}:latest` === b;
+
+/** Pick the model to use: the preferred one if installed, otherwise the best installed chat model. */
+export async function resolveModel(): Promise<string> {
+  const models = await installedModels();
+  for (const want of PREFERRED_MODELS) {
+    const hit = models.find((m) => sameModel(m, want));
+    if (hit) return hit;
+  }
+  const chat = models.filter((m) => !/embed|bge|minilm|nomic|vision|llava/i.test(m));
+  if (chat.length > 0) return chat[0];
+  throw new OllamaModelMissingError(`No chat model installed in Ollama (wanted ${OLLAMA_MODEL})`);
+}
+
+/** Report whether Ollama is running and which model would be used. */
+export async function ollamaStatus(): Promise<{ running: boolean; modelInstalled: boolean; model: string; models: string[] }> {
   try {
-    const r = await fetch(`${OLLAMA_HOST}/api/tags`, { signal: AbortSignal.timeout(3000) });
-    if (!r.ok) return { running: false, modelInstalled: false, models: [] };
-    const data: any = await r.json();
-    const models: string[] = (data.models || []).map((m: any) => m.name);
-    const wanted = OLLAMA_MODEL.includes(':') ? OLLAMA_MODEL : `${OLLAMA_MODEL}:latest`;
-    return { running: true, modelInstalled: models.includes(wanted) || models.includes(OLLAMA_MODEL), models };
+    const models = await installedModels();
+    try {
+      const model = await resolveModel();
+      return { running: true, modelInstalled: true, model, models };
+    } catch {
+      return { running: true, modelInstalled: false, model: OLLAMA_MODEL, models };
+    }
   } catch {
-    return { running: false, modelInstalled: false, models: [] };
+    return { running: false, modelInstalled: false, model: OLLAMA_MODEL, models: [] };
   }
 }
 
-/**
- * Send a chat request to Ollama and return the full reply.
- * Streaming is used so slow local generation never hits an HTTP header timeout.
- */
-export async function ollamaChat(messages: OllamaMessage[], format?: object): Promise<string> {
-  let res: Response;
-  try {
-    res = await fetch(`${OLLAMA_HOST}/api/chat`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: OLLAMA_MODEL,
-        messages,
-        stream: true,
-        ...(format ? { format } : {}),
-        options: { num_ctx: NUM_CTX, temperature: 0.2 },
-      }),
-    });
-  } catch (e: any) {
-    throw new OllamaUnavailableError(`Cannot reach Ollama at ${OLLAMA_HOST}: ${e?.message || e}`);
-  }
-  if (!res.ok || !res.body) {
-    const body = await res.text().catch(() => '');
-    throw new Error(`Ollama error ${res.status}: ${body}`);
-  }
-
+/** Send a chat request to Ollama and return the full reply and the model that produced it. */
+export async function ollamaChat(messages: OllamaMessage[], format?: object): Promise<{ text: string; model: string }> {
+  const model = await resolveModel();
   let reply = '';
-  let buffer = '';
-  const decoder = new TextDecoder();
-  const reader = res.body.getReader();
-  for (;;) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    let nl: number;
-    while ((nl = buffer.indexOf('\n')) >= 0) {
-      const line = buffer.slice(0, nl).trim();
-      buffer = buffer.slice(nl + 1);
-      if (!line) continue;
+  let streamError = '';
+  const r = await request(
+    '/api/chat',
+    {
+      model,
+      messages,
+      stream: true,
+      ...(format ? { format } : {}),
+      options: { num_ctx: NUM_CTX, temperature: 0.2 },
+    },
+    (line) => {
       const chunk = JSON.parse(line);
-      if (chunk.error) throw new Error(`Ollama error: ${chunk.error}`);
+      if (chunk.error) streamError = chunk.error;
       reply += chunk.message?.content || '';
     }
-  }
-  if (buffer.trim()) {
-    const chunk = JSON.parse(buffer);
-    if (chunk.error) throw new Error(`Ollama error: ${chunk.error}`);
-    reply += chunk.message?.content || '';
-  }
-  return reply;
+  );
+  if (r.status === 404) throw new OllamaModelMissingError(`Model ${model} not found: ${r.text}`);
+  if (r.status !== 200) throw new Error(`Ollama error ${r.status}: ${r.text}`);
+  if (streamError) throw new Error(`Ollama error: ${streamError}`);
+  return { text: reply, model };
 }

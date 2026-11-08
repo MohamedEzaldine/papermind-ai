@@ -34,7 +34,18 @@ export const UploadPage: React.FC<UploadPageProps> = ({
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [currentStage, setCurrentStage] = useState<1 | 2 | 3>(1);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [engine, setEngine] = useState<{ provider: string; model: string; ready: boolean } | null>(null);
+  const [elapsed, setElapsed] = useState(0);
+
+  // Elapsed-time counter while analyzing, so long local runs never look frozen.
+  useEffect(() => {
+    if (!isAnalyzing) return;
+    setElapsed(0);
+    const started = Date.now();
+    const id = setInterval(() => setElapsed(Math.floor((Date.now() - started) / 1000)), 1000);
+    return () => clearInterval(id);
+  }, [isAnalyzing]);
+
+  const [engine, setEngine] = useState<{ provider: string; model: string; ready: boolean; running?: boolean } | null>(null);
 
   // Ask the server which AI engine is active (local Ollama or Gemini) so the user knows what to expect.
   useEffect(() => {
@@ -193,10 +204,14 @@ export const UploadPage: React.FC<UploadPageProps> = ({
               ? language === 'ar'
                 ? engine.ready
                   ? `يعمل محلياً على جهازك (Ollama · ${engine.model}) — قد يستغرق التحليل عدة دقائق`
-                  : `النموذج المحلي غير جاهز: شغّل Ollama وثبّت ${engine.model}`
+                  : engine.running === false
+                  ? 'محرك الذكاء الاصطناعي المحلي (Ollama) لا يعمل — افتحه من قائمة ابدأ'
+                  : `لا يوجد نموذج مثبت في Ollama — ثبّت ${engine.model}`
                 : engine.ready
                   ? `Running locally on your device (Ollama · ${engine.model}) — analysis may take a few minutes`
-                  : `Local model not ready: start Ollama and install ${engine.model}`
+                  : engine.running === false
+                    ? 'The local AI engine (Ollama) is not running — open it from the Start menu'
+                    : `No model installed in Ollama — install ${engine.model}`
               : language === 'ar'
                 ? `محرك التحليل: Gemini (${engine.model})`
                 : `Analysis engine: Gemini (${engine.model})`}
@@ -344,6 +359,20 @@ export const UploadPage: React.FC<UploadPageProps> = ({
                     <Award className="w-3.5 h-3.5 shrink-0" />
                     <span className="truncate">{isAr ? 'التقييم الأكاديمي' : 'Peer Review'}</span>
                   </div>
+                </div>
+
+                {/* Elapsed time, with a reassurance note for the local engine */}
+                <div className="flex flex-wrap items-center justify-between gap-2 pt-1 text-xs text-slate-500 dark:text-slate-400">
+                  <span className="font-mono tabular-nums" dir="ltr">
+                    {Math.floor(elapsed / 60)}:{String(elapsed % 60).padStart(2, '0')}
+                  </span>
+                  {engine?.provider === 'ollama' && elapsed >= 20 && (
+                    <span>
+                      {isAr
+                        ? 'التحليل يعمل على جهازك؛ قد يستغرق من 2 إلى 15 دقيقة حسب قوة الجهاز. لا تغلق البرنامج.'
+                        : 'The analysis runs on your computer; it can take 2–15 minutes depending on your hardware. Keep the app open.'}
+                    </span>
+                  )}
                 </div>
               </div>
             )}
