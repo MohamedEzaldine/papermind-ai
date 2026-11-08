@@ -5,6 +5,15 @@ import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 import { GoogleGenAI, Type } from '@google/genai';
 import { extractPaperText, checkPoint, PaperText } from './server/evidence';
+import {
+  OLLAMA_HOST,
+  OLLAMA_MODEL,
+  OllamaUnavailableError,
+  ollamaChat,
+  ollamaStatus,
+  paperAsText,
+  toJsonSchema,
+} from './server/ollama';
 
 dotenv.config();
 
@@ -21,9 +30,28 @@ async function startServer() {
   app.use(express.urlencoded({ extended: true, limit: '35mb' }));
 
   const MODEL = process.env.GEMINI_MODEL || 'gemini-3.8-flash';
-  if (!process.env.GEMINI_API_KEY) {
-    console.warn('WARNING: GEMINI_API_KEY is not set. Analysis and Q&A requests will fail until it is configured.');
+
+  // AI provider: "ollama" runs fully on this machine (no key, no cloud);
+  // "gemini" uses Google's API. Without an explicit choice, use Gemini only when a key is set.
+  const PROVIDER: 'gemini' | 'ollama' =
+    process.env.AI_PROVIDER === 'gemini' || process.env.AI_PROVIDER === 'ollama'
+      ? process.env.AI_PROVIDER
+      : process.env.GEMINI_API_KEY
+        ? 'gemini'
+        : 'ollama';
+  if (PROVIDER === 'ollama') {
+    console.log(`AI provider: local Ollama (${OLLAMA_MODEL} at ${OLLAMA_HOST})`);
+  } else {
+    console.log(`AI provider: Gemini (${MODEL})`);
+    if (!process.env.GEMINI_API_KEY) {
+      console.warn('WARNING: GEMINI_API_KEY is not set. Analysis and Q&A requests will fail until it is configured.');
+    }
   }
+
+  const ollamaDownMessage = (ar: boolean) =>
+    ar
+      ? `تعذر الاتصال بـ Ollama على هذا الجهاز. تأكد أن Ollama يعمل وأن النموذج ${OLLAMA_MODEL} مثبت (ollama pull ${OLLAMA_MODEL}).`
+      : `Could not reach Ollama on this machine. Make sure Ollama is running and the model ${OLLAMA_MODEL} is installed (ollama pull ${OLLAMA_MODEL}).`;
 
   // Initialize shared Gemini client (the key stays on the server and is never sent to the browser)
   const ai = new GoogleGenAI({
@@ -98,6 +126,15 @@ async function startServer() {
     required: ['overview', 'sections'],
   };
 
+  // API Route: which AI engine is active (shown in the UI)
+  app.get('/api/health', async (_req, res) => {
+    if (PROVIDER === 'ollama') {
+      const st = await ollamaStatus();
+      return res.json({ provider: 'ollama', model: OLLAMA_MODEL, ready: st.running && st.modelInstalled, ...st });
+    }
+    return res.json({ provider: 'gemini', model: MODEL, ready: !!process.env.GEMINI_API_KEY });
+  });
+
   // API Route: Analyze PDF
   app.post('/api/analyze', async (req, res) => {
     try {
@@ -112,7 +149,7 @@ async function startServer() {
 
       const isArabic = language === 'ar';
 
-      if (!process.env.GEMINI_API_KEY) {
+      if (PROVIDER === 'gemini' && !process.env.GEMINI_API_KEY) {
         return res.status(503).json({
           error: isArabic
             ? 'لم يتم إعداد مفتاح Gemini على الخادم بعد. يرجى التواصل مع مسؤول التطبيق.'
@@ -164,32 +201,55 @@ CRITICAL INSTRUCTIONS:
         ? 'قم بتحليل هذه الورقة البحثية بعمق وموضوعية علمية كاملة وفق البنية الهيكلية المحددة مع استخراج الأدلة وأرقام الصفحات بدقة متناهية.'
         : 'Analyze this research paper deeply with rigorous scientific evaluation, page-level evidence, and structured output as specified.';
 
-      const response = await ai.models.generateContent({
-        model: MODEL,
-        contents: [
-          {
-            role: 'user',
-            parts: [
-              {
-                inlineData: {
-                  mimeType: 'application/pdf',
-                  data: cleanBase64,
-                },
-              },
-              {
-                text: promptText,
-              },
-            ],
-          },
-        ],
-        config: {
-          systemInstruction,
-          responseMimeType: 'application/json',
-          responseSchema: analysisResponseSchema,
-        },
-      });
+      let rawJson: string | undefined;
+      let truncatedNote: { truncated: boolean; pagesIncluded: number } | undefined;
 
-      const rawJson = response.text;
+      if (PROVIDER === 'ollama') {
+        if (!paperText) {
+          throw new Error('Could not extract text from this PDF for the local model');
+        }
+        // Local models cannot read PDFs, so they get the extracted text with [Page N] markers.
+        const paper = paperAsText(paperText.rawPages);
+        truncatedNote = { truncated: paper.truncated, pagesIncluded: paper.pagesIncluded };
+        rawJson = await ollamaChat(
+          [
+            {
+              role: 'system',
+              content:
+                systemInstruction.replace('the attached research paper PDF', 'the research paper text below') +
+                '\n8. The paper text is split by [Page N] markers. Use those numbers as page numbers. Return only JSON matching the schema.',
+            },
+            { role: 'user', content: `${promptText}\n\n=== PAPER TEXT ===${paper.text}` },
+          ],
+          toJsonSchema(analysisResponseSchema)
+        );
+      } else {
+        const response = await ai.models.generateContent({
+          model: MODEL,
+          contents: [
+            {
+              role: 'user',
+              parts: [
+                {
+                  inlineData: {
+                    mimeType: 'application/pdf',
+                    data: cleanBase64,
+                  },
+                },
+                {
+                  text: promptText,
+                },
+              ],
+            },
+          ],
+          config: {
+            systemInstruction,
+            responseMimeType: 'application/json',
+            responseSchema: analysisResponseSchema,
+          },
+        });
+        rawJson = response.text;
+      }
       if (!rawJson) {
         throw new Error('Empty response received from AI model');
       }
@@ -223,6 +283,8 @@ CRITICAL INSTRUCTIONS:
         analyzedAt: new Date().toISOString(),
         language,
         pageCount: paperText?.pages.length,
+        engine: PROVIDER === 'ollama' ? `Ollama · ${OLLAMA_MODEL}` : `Gemini · ${MODEL}`,
+        truncatedAfterPage: truncatedNote?.truncated ? truncatedNote.pagesIncluded : undefined,
       };
 
       return res.json(result);
@@ -233,7 +295,9 @@ CRITICAL INSTRUCTIONS:
         ? 'حدث خطأ أثناء تحليل الورقة. يرجى التحقق من صحة الملف والمحاولة مجدداً.'
         : 'An error occurred while analyzing the paper. Please verify the PDF and try again.';
 
-      if (err?.message?.includes('RESOURCE_EXHAUSTED')) {
+      if (err instanceof OllamaUnavailableError || /model .* not found/i.test(err?.message || '')) {
+        message = ollamaDownMessage(isArabic);
+      } else if (err?.message?.includes('RESOURCE_EXHAUSTED')) {
         message = isArabic
           ? 'تم تجاوز حد الاستخدام المؤقت للخدمة. يرجى الانتظار لحظات وإعادة المحاولة.'
           : 'Service rate limit reached. Please wait a moment and try again.';
@@ -265,7 +329,7 @@ RULES:
    Never speculate, guess, or use external knowledge not found in the PDF.
 4. TONE: Clear, concise, scholarly, and objective.`;
 
-      if (!process.env.GEMINI_API_KEY) {
+      if (PROVIDER === 'gemini' && !process.env.GEMINI_API_KEY) {
         return res.status(503).json({
           error: isArabic ? 'لم يتم إعداد مفتاح Gemini على الخادم بعد.' : 'The Gemini API key is not configured on the server yet.',
         });
@@ -295,15 +359,32 @@ RULES:
       }
       contents.push({ role: 'user', parts: [{ text: question }] });
 
-      const response = await ai.models.generateContent({
-        model: MODEL,
-        contents,
-        config: {
-          systemInstruction,
-        },
-      });
-
-      const replyText = response.text || '';
+      let replyText = '';
+      if (PROVIDER === 'ollama') {
+        let paperBlock = '';
+        if (pdfBase64) {
+          const extracted = await extractPaperText(
+            Buffer.from(pdfBase64.replace(/^data:application\/pdf;base64,/, ''), 'base64')
+          );
+          paperBlock = `\n\nThe paper text is split by [Page N] markers; cite those page numbers.\n=== PAPER TEXT ===${paperAsText(extracted.rawPages).text}`;
+        }
+        replyText = await ollamaChat([
+          { role: 'system', content: systemInstruction.replace('uploaded research paper PDF', 'research paper text below') + paperBlock },
+          ...history
+            .filter((m: any) => m?.text)
+            .map((m: any) => ({ role: m.role === 'model' ? ('assistant' as const) : ('user' as const), content: String(m.text) })),
+          { role: 'user', content: question },
+        ]);
+      } else {
+        const response = await ai.models.generateContent({
+          model: MODEL,
+          contents,
+          config: {
+            systemInstruction,
+          },
+        });
+        replyText = response.text || '';
+      }
 
       // Extract page citations like [p. 4] or [ص. 4] or (p. 4)
       const pageMatches = replyText.match(/(?:\[|\()(?:\s*p\.?|\s*ص\.?)\s*(\d+)(?:\]|\))/gi);
@@ -334,9 +415,12 @@ RULES:
     } catch (err: any) {
       console.error('Chat error:', err);
       const isArabic = req.body?.language === 'ar';
-      const message = isArabic
-        ? 'حدث خطأ أثناء معالجة السؤال. يرجى المحاولة مرة أخرى.'
-        : 'An error occurred while answering your question. Please try again.';
+      const message =
+        err instanceof OllamaUnavailableError
+          ? ollamaDownMessage(isArabic)
+          : isArabic
+            ? 'حدث خطأ أثناء معالجة السؤال. يرجى المحاولة مرة أخرى.'
+            : 'An error occurred while answering your question. Please try again.';
       return res.status(500).json({ error: message, detail: err.message });
     }
   });

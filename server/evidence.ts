@@ -19,6 +19,7 @@ export interface EvidenceCheck {
 }
 
 export interface PaperText {
+  rawPages: string[]; // original extracted text per page (index 0 = page 1)
   pages: string[]; // normalized text per page (index 0 = page 1)
   fullText: string; // normalized text of the whole paper
   numberSet: Set<string>; // every number that appears in the paper
@@ -62,7 +63,7 @@ export async function extractPaperText(pdf: Buffer): Promise<PaperText> {
   const rawCharCount = rawPages.reduce((n, p) => n + p.replace(/\s/g, '').length, 0);
   const numberSet = new Set<string>();
   for (const p of rawPages) for (const n of extractNumbers(p)) numberSet.add(n);
-  return { pages, fullText: pages.join(' '), numberSet, rawCharCount };
+  return { rawPages, pages, fullText: pages.join(' '), numberSet, rawCharCount };
 }
 
 function trigrams(words: string[]): string[] {

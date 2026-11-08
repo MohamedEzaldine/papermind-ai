@@ -34,6 +34,15 @@ export const UploadPage: React.FC<UploadPageProps> = ({
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [currentStage, setCurrentStage] = useState<1 | 2 | 3>(1);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [engine, setEngine] = useState<{ provider: string; model: string; ready: boolean } | null>(null);
+
+  // Ask the server which AI engine is active (local Ollama or Gemini) so the user knows what to expect.
+  useEffect(() => {
+    fetch('/api/health')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => d && setEngine(d))
+      .catch(() => {});
+  }, []);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const stageTimerRef = useRef<any>(null);
@@ -171,6 +180,28 @@ export const UploadPage: React.FC<UploadPageProps> = ({
         <p className="text-base sm:text-lg text-slate-600 dark:text-slate-300 max-w-2xl mx-auto">
           {t.uploadSubtitle}
         </p>
+        {engine && (
+          <div
+            className={`mt-4 inline-flex flex-wrap items-center justify-center gap-2 px-3.5 py-1.5 rounded-full text-xs font-semibold border ${
+              engine.ready
+                ? 'bg-teal-50 dark:bg-teal-950/50 text-teal-800 dark:text-teal-300 border-teal-200 dark:border-teal-800'
+                : 'bg-amber-50 dark:bg-amber-950/50 text-amber-800 dark:text-amber-300 border-amber-200 dark:border-amber-800'
+            }`}
+          >
+            <span className={`w-2 h-2 rounded-full ${engine.ready ? 'bg-emerald-500' : 'bg-amber-500'}`} />
+            {engine.provider === 'ollama'
+              ? language === 'ar'
+                ? engine.ready
+                  ? `يعمل محلياً على جهازك (Ollama · ${engine.model}) — قد يستغرق التحليل عدة دقائق`
+                  : `النموذج المحلي غير جاهز: شغّل Ollama وثبّت ${engine.model}`
+                : engine.ready
+                  ? `Running locally on your device (Ollama · ${engine.model}) — analysis may take a few minutes`
+                  : `Local model not ready: start Ollama and install ${engine.model}`
+              : language === 'ar'
+                ? `محرك التحليل: Gemini (${engine.model})`
+                : `Analysis engine: Gemini (${engine.model})`}
+          </div>
+        )}
       </div>
 
       {/* Error Banner */}

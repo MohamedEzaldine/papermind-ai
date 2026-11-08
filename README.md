@@ -56,13 +56,24 @@ Express server (server.ts)
 | `src/utils/` | Excel export and evidence labels |
 | `src/locales/translations.ts` | Arabic and English UI text |
 
+## AI engines
+
+PaperMind AI can run with either of two engines:
+
+| Engine | When | Needs |
+|---|---|---|
+| **Ollama (local)** | Default when no Gemini key is set | [Ollama](https://ollama.com) running on the same computer, with the model pulled (`ollama pull qwen2.5:7b`). No key, no cloud, and the paper never leaves the device. |
+| **Gemini (cloud)** | When `GEMINI_API_KEY` is set, or `AI_PROVIDER=gemini` | A free key from <https://aistudio.google.com/apikey> |
+
+With Ollama, the server sends the model the paper's extracted text with `[Page N]` markers, so page citations and evidence verification work the same way. The upload page shows which engine is active and whether it is ready.
+
 ## Run locally
 
-Requirements: Node.js 20 or newer, and a free Gemini API key from <https://aistudio.google.com/apikey>.
+Requirements: Node.js 20 or newer, plus Ollama with a model, or a Gemini key.
 
 ```bash
 npm install
-cp .env.example .env      # then put your key in .env
+cp .env.example .env      # optional: choose the engine/model
 npm run dev               # http://localhost:3000
 ```
 
