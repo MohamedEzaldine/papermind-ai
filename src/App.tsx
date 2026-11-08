@@ -5,7 +5,6 @@ import { UploadPage } from './components/UploadPage';
 import { AnalysisDashboard } from './components/AnalysisDashboard';
 import { AskPaperDrawer } from './components/AskPaperDrawer';
 import { Language, PageView, AnalysisResult, ChatMessage } from './types';
-import { samplePaperAr, samplePaperEn } from './data/samplePaper';
 
 export default function App() {
   // 1. Language state: default Arabic ('ar') as required
@@ -26,7 +25,6 @@ export default function App() {
   const [currentPage, setCurrentPage] = useState<PageView>('landing');
   const [analysisData, setAnalysisData] = useState<AnalysisResult | null>(null);
   const [rawPdfBase64, setRawPdfBase64] = useState<string | null>(null);
-  const [isSampleActive, setIsSampleActive] = useState<boolean>(false);
 
   // 4. Q&A Chat drawer state & history
   const [isAskDrawerOpen, setIsAskDrawerOpen] = useState<boolean>(false);
@@ -56,10 +54,6 @@ export default function App() {
   // Toggle language handler
   const handleLanguageChange = (newLang: Language) => {
     setLanguage(newLang);
-    // If currently on sample paper, switch sample paper data to new language
-    if (isSampleActive) {
-      setAnalysisData(newLang === 'ar' ? samplePaperAr : samplePaperEn);
-    }
   };
 
   // Toggle dark mode handler
@@ -67,20 +61,8 @@ export default function App() {
     setDarkMode((prev) => !prev);
   };
 
-  // Load sample paper
-  const handleLoadSample = () => {
-    setIsSampleActive(true);
-    setRawPdfBase64(null); // Sample paper has pre-loaded insights
-    const sample = language === 'ar' ? samplePaperAr : samplePaperEn;
-    setAnalysisData(sample);
-    setChatHistory([]); // Reset chat for new paper
-    setCurrentPage('dashboard');
-    window.scrollTo({ top: 0, behavior: 'smooth' });
-  };
-
   // Analysis complete handler from real PDF upload
   const handleAnalysisComplete = (result: AnalysisResult, base64?: string) => {
-    setIsSampleActive(false);
     setAnalysisData(result);
     setRawPdfBase64(base64 || null);
     setChatHistory([]); // Reset chat for new paper
@@ -120,7 +102,6 @@ export default function App() {
           <LandingPage
             language={language}
             onStartAnalyzing={() => setCurrentPage('upload')}
-            onLoadSample={handleLoadSample}
           />
         )}
 
@@ -128,7 +109,6 @@ export default function App() {
           <UploadPage
             language={language}
             onAnalysisComplete={handleAnalysisComplete}
-            onLoadSample={handleLoadSample}
           />
         )}
 

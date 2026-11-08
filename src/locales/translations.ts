@@ -5,7 +5,6 @@ export interface Translations {
   tagline: string;
   heroDescription: string;
   startAnalyzing: string;
-  trySamplePaper: string;
   featuresTitle: string;
   featuresSubtitle: string;
   problemTitle: string;
@@ -32,8 +31,6 @@ export interface Translations {
     stage2: string;
     stage3: string;
   };
-  samplePrompt: string;
-  sampleBadge: string;
   
   // Dashboard
   summaryBarTitle: string;
@@ -93,7 +90,6 @@ export const translations: Record<Language, Translations> = {
     tagline: 'افهم أي ورقة بحثية — بعمق، وبالدليل الموثق.',
     heroDescription: 'منصة ذكية متخصصة للباحثين وطلاب الدراسات العليا لتحليل الأوراق العلمية ونقدها منهجياً، مع توثيق كل استنتاج برقم الصفحة والاقتباس المباشر.',
     startAnalyzing: 'ابدأ التحليل الآن',
-    trySamplePaper: 'تجربة ورقة بحثية نموذجية (Transformer)',
     featuresTitle: 'أدوات بحثية متقدمة لقراءة علمية فاحصة',
     featuresSubtitle: 'صُمم النظام لتجاوز الملخصات السطحية والوصول إلى جوهر البنية العلمية بدقة متناهية.',
     problemTitle: 'تحديات القراءة والتقييم النقدي للأوراق العلمية',
@@ -180,8 +176,6 @@ export const translations: Record<Language, Translations> = {
       stage2: 'جاري استخراج الهيكل والبيانات والأدلة الموضعية…',
       stage3: 'جاري صياغة التقييم الأكاديمي وتوثيق الصفحات…'
     },
-    samplePrompt: 'لا تملك ملفاً جاهزاً حالياً؟',
-    sampleBadge: 'جرب ورقة بحثية شهيرة جاهزة للتحليل فوراً',
     
     // Dashboard
     summaryBarTitle: 'بطاقة الورقة البحثية',
@@ -255,7 +249,6 @@ export const translations: Record<Language, Translations> = {
     tagline: 'Understand any research paper — deeply, with evidence.',
     heroDescription: 'A specialized platform for researchers and graduate students to systematically evaluate and peer-review scientific papers, with every insight linked to an exact page number and direct quote.',
     startAnalyzing: 'Start Analyzing Now',
-    trySamplePaper: 'Try Sample Paper (Transformer / Attention)',
     featuresTitle: 'Rigorous Academic Tools for In-Depth Reading',
     featuresSubtitle: 'Built to move past surface-level summaries and penetrate the scientific core with page-level rigor.',
     problemTitle: 'The Critical Burden of Scientific Evaluation',
@@ -342,8 +335,6 @@ export const translations: Record<Language, Translations> = {
       stage2: 'Extracting methodology, evidence & page loci…',
       stage3: 'Synthesizing academic evaluation & citations…'
     },
-    samplePrompt: 'Do not have a paper on hand?',
-    sampleBadge: 'Test with a classic seminal research paper instantly',
     
     // Dashboard
     summaryBarTitle: 'Paper Dossier',

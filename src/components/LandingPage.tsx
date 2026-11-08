@@ -22,13 +22,11 @@ import { translations } from '../locales/translations';
 interface LandingPageProps {
   language: Language;
   onStartAnalyzing: () => void;
-  onLoadSample: () => void;
 }
 
 export const LandingPage: React.FC<LandingPageProps> = ({
   language,
   onStartAnalyzing,
-  onLoadSample,
 }) => {
   const t = translations[language];
   const isAr = language === 'ar';
@@ -84,13 +82,6 @@ export const LandingPage: React.FC<LandingPageProps> = ({
               {isAr ? <ArrowLeft className="w-5 h-5" /> : <ArrowRight className="w-5 h-5" />}
             </button>
 
-            <button
-              onClick={onLoadSample}
-              className="w-full sm:w-auto flex items-center justify-center gap-2 px-6 py-4 rounded-xl bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700/80 text-slate-700 dark:text-slate-200 border border-slate-300 dark:border-slate-700 text-sm sm:text-base font-semibold shadow-xs hover:shadow-md transition-all duration-200 cursor-pointer"
-            >
-              <Sparkles className="w-4 h-4 text-[#14B8A6]" />
-              <span>{t.trySamplePaper}</span>
-            </button>
           </div>
 
           {/* Quick stats or assurance pill */}

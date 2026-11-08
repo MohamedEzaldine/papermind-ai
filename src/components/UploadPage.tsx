@@ -19,13 +19,11 @@ import { translations } from '../locales/translations';
 interface UploadPageProps {
   language: Language;
   onAnalysisComplete: (result: AnalysisResult, rawBase64?: string) => void;
-  onLoadSample: () => void;
 }
 
 export const UploadPage: React.FC<UploadPageProps> = ({
   language,
   onAnalysisComplete,
-  onLoadSample,
 }) => {
   const t = translations[language];
   const isAr = language === 'ar';
@@ -348,25 +346,6 @@ export const UploadPage: React.FC<UploadPageProps> = ({
         )}
       </div>
 
-      {/* Sample Paper Option */}
-      <div className="p-6 rounded-2xl bg-gradient-to-r from-teal-50/70 via-indigo-50/60 to-purple-50/70 dark:from-slate-800 dark:via-slate-800 dark:to-slate-800 border border-teal-100 dark:border-slate-700 flex flex-col sm:flex-row items-center justify-between gap-4 shadow-xs">
-        <div className="text-center sm:text-left rtl:sm:text-right">
-          <p className="text-xs font-bold text-teal-800 dark:text-teal-400 uppercase tracking-wide">
-            {t.samplePrompt}
-          </p>
-          <p className="text-sm font-semibold text-slate-800 dark:text-slate-200 mt-0.5">
-            {t.sampleBadge}
-          </p>
-        </div>
-
-        <button
-          onClick={onLoadSample}
-          className="px-5 py-2.5 rounded-xl bg-white dark:bg-slate-700 text-slate-800 dark:text-white border border-slate-200 dark:border-slate-600 font-bold text-sm shadow-xs hover:shadow-md hover:bg-slate-50 dark:hover:bg-slate-600 transition-all cursor-pointer flex items-center gap-2 shrink-0"
-        >
-          <Sparkles className="w-4 h-4 text-[#14B8A6]" />
-          <span>{t.trySamplePaper}</span>
-        </button>
-      </div>
     </div>
   );
 };
