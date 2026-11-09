@@ -60,3 +60,13 @@ assert.equal(goodArabicTranslation(en, 'البيانات المcollected لنم�
 assert.equal(goodArabicTranslation(en, 'حقق نموذج LSTM-AE أفضل قيمة AUC بلغت 0.92.'), false);
 assert.equal(goodArabicTranslation(en, 'سرقة في кипри 0.812'), false);
 console.log('PASS  bad translations rejected, good ones kept');
+
+assert.equal(cleanPointText('{1}. طورنا نموذجاً بدقة عالية'), 'طورنا نموذجاً بدقة عالية');
+assert.equal(cleanPointText('2. الضعف: نقص في التقييم'), 'نقص في التقييم');
+assert.equal(cleanPointText('Strength: The framework needs no labels.'), 'The framework needs no labels.');
+const en2 = 'The authors aim to propose a new framework for electricity theft detection in Cyprus.';
+assert.equal(goodArabicTranslation(en2, 'يهدف المؤلفون إلى اقتراح إطار عمل جديد لكشف سرقة الكهرباء في Cyprus.'), true);
+assert.equal(goodArabicTranslation(en2, 'aims إلى تقديم إطار جديد للكشف عن سرقة الكهرباء في Cyprus.'), false);
+assert.equal(goodArabicTranslation(en2, 'أعد.authors تقييم الإطار المقترح لكشف السرقة في Cyprus.'), false);
+assert.equal(goodArabicTranslation(en2, 'وعيا'), false);
+console.log('PASS  numbering, category prefixes, plain English words and empty translations handled');

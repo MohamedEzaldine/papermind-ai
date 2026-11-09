@@ -113,7 +113,8 @@ export function cleanPointText(text: string): string {
   return text
     .replace(/[([]\s*(?:[Sس]\s*\d+|ص\s*[:.]?\s*\d+|p\.?\s*\d+|صفح[ةه]\s*\d+)[^)\]]*[)\]]/gi, '')
     .replace(/\b[Sس]\d+\b/g, '')
-    .replace(/^\s*\d+[.)-]\s+/, '')
+    .replace(/^\s*(?:\{\d+\}|\(\d+\)|\[\d+\]|\d+)\s*[.):-]?\s+/, '') // "1. ", "{1}. ", "(2) "
+    .replace(/^\s*(?:strengths?|weakness(?:es)?|نقطة القوة|نقطة الضعف|القوة|الضعف|قوة|ضعف)\s*[:：-]\s*/i, '') // the category is shown separately
     .replace(/\s+([.,،؛:])/g, '$1')
     .replace(/\s{2,}/g, ' ')
     .trim();
@@ -143,7 +144,11 @@ export function numbersSupported(pointText: string, evidence: string): boolean {
  */
 export function goodArabicTranslation(english: string, arabic: string): boolean {
   if (!arabic || !/[؀-ۿ]/.test(arabic) || hasForeignScript(arabic)) return false;
-  if (/[؀-ۿ][A-Za-z]|[A-Za-z][؀-ۿ]/.test(arabic)) return false;
+  if (/[؀-ۿ][.,]?[A-Za-z]|[A-Za-z][.,]?[؀-ۿ]/.test(arabic)) return false;
+  // Far shorter than the source means words were lost (e.g. a one-word "translation").
+  if (arabic.length < english.length * 0.35) return false;
+  // Latin words are allowed only as technical names (LSTM-AE, AUC, Cyprus), never as plain words ("aims", "authors").
+  if ((arabic.match(/[A-Za-z][A-Za-z0-9-]*/g) || []).some((w) => /^[a-z]+$/.test(w))) return false;
   const sourceWords = new Set((english.toLowerCase().match(/[a-z][a-z0-9-]*/g) || []).map((w) => w.replace(/s$/, '')));
   const latinWords = arabic.toLowerCase().match(/[a-z][a-z0-9-]*/g) || [];
   if (latinWords.some((w) => !sourceWords.has(w) && !sourceWords.has(w.replace(/s$/, '')))) return false;

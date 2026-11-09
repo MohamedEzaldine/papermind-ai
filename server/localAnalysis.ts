@@ -194,7 +194,7 @@ export async function analyzeLocally(
     );
     const out: string[] = Array.isArray(res?.translations) ? res.translations : [];
     return texts.map((en, i) => {
-      const ar = (out[i] || '').trim();
+      const ar = cleanPointText(out[i] || '');
       return goodArabicTranslation(en, ar) ? ar : en;
     });
   };
