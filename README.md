@@ -14,6 +14,11 @@
   <a href="https://github.com/MohamedEzaldine/papermind-ai/releases/latest"><img src="https://img.shields.io/badge/Platform-Windows%2010%2F11-0078D6.svg" alt="Platform: Windows 10/11"></a>
   <a href="#"><img src="https://img.shields.io/badge/License-All%20Rights%20Reserved-red.svg" alt="License: All Rights Reserved"></a>
   <br>
+  <a href="#"><img src="https://img.shields.io/badge/100%25-Offline-success.svg" alt="100% Offline"></a>
+  <a href="#"><img src="https://img.shields.io/badge/Cost-Free%20%E2%80%94%20No%20Subscriptions-success.svg" alt="Free, no subscriptions"></a>
+  <a href="#"><img src="https://img.shields.io/badge/API%20Keys-Not%20Required-success.svg" alt="No API keys required"></a>
+  <a href="#"><img src="https://img.shields.io/badge/Privacy-Papers%20Stay%20on%20Your%20PC-success.svg" alt="Papers stay on your PC"></a>
+  <br>
   <a href="https://aistudio.google.com"><img src="https://img.shields.io/badge/Built%20with-Google%20AI%20Studio-4285F4.svg?logo=google&logoColor=white" alt="Built with Google AI Studio"></a>
   <a href="https://ai.google.dev"><img src="https://img.shields.io/badge/AI-Gemini-8E75B2.svg?logo=googlegemini&logoColor=white" alt="Gemini"></a>
   <a href="https://ollama.com"><img src="https://img.shields.io/badge/Local%20AI-Ollama-000000.svg?logo=ollama&logoColor=white" alt="Ollama"></a>
@@ -39,7 +44,12 @@
 
 **PaperMind AI** برنامج يحلّل الأوراق البحثية في أي تخصص علمي. ترفع ملف PDF واحد، فيقدّم لك تقييماً منهجياً في **10 أقسام**، على طريقة المحكّمين الأكاديميين. كل نقطة في التحليل مرتبطة **برقم الصفحة** و**اقتباس من الورقة نفسها**، ويتحقق البرنامج تلقائياً من أن الاقتباس موجود فعلاً في نص الورقة.
 
-**يعمل البرنامج على جهازك بالكامل:** لا يحتاج إلى مفاتيح API، ولا إلى إنترنت بعد التثبيت، ولا تغادر الورقة جهازك.
+> ### 🌟 أهم ما يميّز PaperMind AI: يعمل محلياً على جهازك — مجاناً وبدون أي اشتراكات
+> لا يعتمد البرنامج على أي خدمة ذكاء اصطناعي سحابية مدفوعة (مثل ChatGPT أو Gemini). يشغّل نموذج ذكاء اصطناعي **مفتوح المصدر ومجاني** على جهازك نفسه، لذلك:
+> - **بدون رسوم أو اشتراكات** شهرية، ولا حدود لعدد الأوراق التي تحللها.
+> - **بدون مفاتيح API** وبدون إنشاء حسابات لدى أي شركة.
+> - **بدون إنترنت** بعد التثبيت، فيعمل في أي مكان.
+> - **خصوصية كاملة:** الورقة لا تغادر جهازك ولا تُرفع إلى أي خادم.
 
 ---
 
@@ -74,6 +84,7 @@
 
 ## ✨ المميزات
 
+- 🌟 **الميزة الأهم: يعمل محلياً ومجاناً بالكامل.** لا يرتبط بأي خدمة ذكاء اصطناعي سحابية، ولا يحتاج إلى رسوم أو اشتراكات أو مفاتيح API أو إنترنت بعد التثبيت. يشغّل نموذجاً مفتوح المصدر (Qwen 2.5) على جهازك عبر Ollama، فلا حدود لعدد الأوراق، ولا تغادر بياناتك جهازك.
 - **تحليل منهجي في 10 أقسام:**
   1. نظرة عامة
   2. المشكلة البحثية والفجوة المعرفية
@@ -92,7 +103,6 @@
 - **نسبة إنجاز حقيقية** أثناء التحليل، مع اسم القسم الجاري تحليله والوقت المتبقي.
 - **تصدير التحليل** إلى ملف Excel أو تقرير PDF جاهز للطباعة.
 - **واجهة عربية وإنجليزية** مع دعم كامل للكتابة من اليمين لليسار، ووضع ليلي.
-- **خصوصية كاملة:** التحليل يتم على جهازك، والورقة لا تُرفع إلى أي خادم.
 
 ---
 
@@ -249,6 +259,7 @@ npm run dist:win     # بناء ملف التثبيت (على Windows)
 
 **PaperMind AI** analyzes one research paper (PDF) at a time, in any discipline. It produces a 10-section, peer-review-style analysis in which every point carries its page number, an explicit-or-inferred label, and a quote taken from the paper, and it automatically verifies that evidence against the PDF text.
 
+- **Biggest advantage: it runs locally and for free.** It does not depend on any paid cloud AI service. An open-source model (Qwen 2.5) runs on your own PC through Ollama, so there are no fees, no subscriptions, no API keys, no limit on papers, and nothing leaves your computer.
 - **Desktop app for Windows.** It runs fully offline with Ollama after installation, with no API keys. The installer sets up Ollama and downloads the model that suits the computer. [Download the latest release](https://github.com/MohamedEzaldine/papermind-ai/releases/latest).
 - **Features.** Fast, Balanced and Accurate modes; live progress with an estimate of the time left; Ask the Paper (Q&A grounded in the paper); Excel and PDF export; Arabic and English interface with RTL support; dark mode.
 - **Graduation project** of the AI Ambassadors Program, National Telecommunication Institute (NTI), Ministry of Communications and Information Technology, Egypt.
