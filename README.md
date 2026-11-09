@@ -9,29 +9,28 @@
 <p align="center"><b>افهم أي ورقة بحثية — بعمق، وبالدليل الموثّق</b></p>
 
 <p align="center">
-
-[![Version: 1.0.0](https://img.shields.io/badge/Version-1.0.0-orange.svg)](https://github.com/MohamedEzaldine/papermind-ai/releases/latest)
-[![Download](https://img.shields.io/badge/Download-Windows%20Installer-2ea44f.svg?logo=windows&logoColor=white)](https://github.com/MohamedEzaldine/papermind-ai/releases/latest)
-[![Platform: Windows 10/11](https://img.shields.io/badge/Platform-Windows%2010%2F11-0078D6.svg)](https://github.com/MohamedEzaldine/papermind-ai/releases/latest)
-[![License: All Rights Reserved](https://img.shields.io/badge/License-All%20Rights%20Reserved-red.svg)](#)
-<br>
-[![Built with Google AI Studio](https://img.shields.io/badge/Built%20with-Google%20AI%20Studio-4285F4.svg?logo=google&logoColor=white)](https://aistudio.google.com)
-[![Gemini](https://img.shields.io/badge/AI-Gemini-8E75B2.svg?logo=googlegemini&logoColor=white)](https://ai.google.dev)
-[![Ollama](https://img.shields.io/badge/Local%20AI-Ollama-000000.svg?logo=ollama&logoColor=white)](https://ollama.com)
-[![Qwen 2.5](https://img.shields.io/badge/Model-Qwen%202.5-6A5ACD.svg)](https://ollama.com/library/qwen2.5)
-<br>
-[![React 19](https://img.shields.io/badge/React-19-61DAFB.svg?logo=react&logoColor=black)](https://react.dev)
-[![TypeScript](https://img.shields.io/badge/TypeScript-3178C6.svg?logo=typescript&logoColor=white)](https://www.typescriptlang.org)
-[![Node.js 22](https://img.shields.io/badge/Node.js-22-339933.svg?logo=nodedotjs&logoColor=white)](https://nodejs.org)
-[![Electron 33](https://img.shields.io/badge/Electron-33-47848F.svg?logo=electron&logoColor=white)](https://www.electronjs.org)
-[![Tailwind CSS 4](https://img.shields.io/badge/Tailwind%20CSS-4-06B6D4.svg?logo=tailwindcss&logoColor=white)](https://tailwindcss.com)
-[![Vite](https://img.shields.io/badge/Vite-646CFF.svg?logo=vite&logoColor=white)](https://vite.dev)
-[![Express](https://img.shields.io/badge/Express-000000.svg?logo=express&logoColor=white)](https://expressjs.com)
-<br>
-[![Graduation Project](https://img.shields.io/badge/Graduation%20Project-AI%20Ambassadors%20Program-gold.svg)](#)
-[![NTI](https://img.shields.io/badge/NTI-National%20Telecommunication%20Institute-005A9C.svg)](#)
-[![MCIT](https://img.shields.io/badge/MCIT-Ministry%20of%20Communications%20and%20IT-C8102E.svg)](#)
-
+  <a href="https://github.com/MohamedEzaldine/papermind-ai/releases/latest"><img src="https://img.shields.io/badge/Version-1.0.0-orange.svg" alt="Version: 1.0.0"></a>
+  <a href="https://github.com/MohamedEzaldine/papermind-ai/releases/latest"><img src="https://img.shields.io/badge/Download-Windows%20Installer-2ea44f.svg?logo=windows&logoColor=white" alt="Download"></a>
+  <a href="https://github.com/MohamedEzaldine/papermind-ai/releases/latest"><img src="https://img.shields.io/badge/Platform-Windows%2010%2F11-0078D6.svg" alt="Platform: Windows 10/11"></a>
+  <a href="#"><img src="https://img.shields.io/badge/License-All%20Rights%20Reserved-red.svg" alt="License: All Rights Reserved"></a>
+  <br>
+  <a href="https://aistudio.google.com"><img src="https://img.shields.io/badge/Built%20with-Google%20AI%20Studio-4285F4.svg?logo=google&logoColor=white" alt="Built with Google AI Studio"></a>
+  <a href="https://ai.google.dev"><img src="https://img.shields.io/badge/AI-Gemini-8E75B2.svg?logo=googlegemini&logoColor=white" alt="Gemini"></a>
+  <a href="https://ollama.com"><img src="https://img.shields.io/badge/Local%20AI-Ollama-000000.svg?logo=ollama&logoColor=white" alt="Ollama"></a>
+  <a href="https://ollama.com/library/qwen2.5"><img src="https://img.shields.io/badge/Model-Qwen%202.5-6A5ACD.svg" alt="Qwen 2.5"></a>
+  <a href="https://www.anthropic.com/claude-code"><img src="https://img.shields.io/badge/Built%20with-Claude%20Code-D97757.svg?logo=claude&logoColor=white" alt="Built with Claude Code"></a>
+  <br>
+  <a href="https://react.dev"><img src="https://img.shields.io/badge/React-19-61DAFB.svg?logo=react&logoColor=black" alt="React 19"></a>
+  <a href="https://www.typescriptlang.org"><img src="https://img.shields.io/badge/TypeScript-3178C6.svg?logo=typescript&logoColor=white" alt="TypeScript"></a>
+  <a href="https://nodejs.org"><img src="https://img.shields.io/badge/Node.js-22-339933.svg?logo=nodedotjs&logoColor=white" alt="Node.js 22"></a>
+  <a href="https://www.electronjs.org"><img src="https://img.shields.io/badge/Electron-33-47848F.svg?logo=electron&logoColor=white" alt="Electron 33"></a>
+  <a href="https://tailwindcss.com"><img src="https://img.shields.io/badge/Tailwind%20CSS-4-06B6D4.svg?logo=tailwindcss&logoColor=white" alt="Tailwind CSS 4"></a>
+  <a href="https://vite.dev"><img src="https://img.shields.io/badge/Vite-646CFF.svg?logo=vite&logoColor=white" alt="Vite"></a>
+  <a href="https://expressjs.com"><img src="https://img.shields.io/badge/Express-000000.svg?logo=express&logoColor=white" alt="Express"></a>
+  <br>
+  <a href="#"><img src="https://img.shields.io/badge/Graduation%20Project-AI%20Ambassadors%20Program-gold.svg" alt="Graduation Project"></a>
+  <a href="#"><img src="https://img.shields.io/badge/NTI-National%20Telecommunication%20Institute-005A9C.svg" alt="NTI"></a>
+  <a href="#"><img src="https://img.shields.io/badge/MCIT-Ministry%20of%20Communications%20and%20IT-C8102E.svg" alt="MCIT"></a>
 </p>
 
 ---
@@ -183,6 +182,7 @@
 | الأداة | الاستخدام |
 |---|---|
 | **Google AI Studio (Build)** | بناء النسخة الأولى من التطبيق انطلاقاً من وصف مفصّل |
+| **Claude Code** | تطوير التطبيق بعد النسخة الأولى: التحقق من الأدلة، والتحليل المحلي، وبرنامج سطح المكتب، وبرنامج التثبيت |
 | **Google Gemini** | محرك التحليل في نسخة الويب |
 | **Ollama** | تشغيل نماذج الذكاء الاصطناعي محلياً على الجهاز |
 | **GitHub · GitHub Actions** | إدارة الكود وبناء ملف التثبيت ونشر الإصدارات |
