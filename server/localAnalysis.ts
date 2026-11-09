@@ -13,7 +13,7 @@
  * fails is reported as such instead of blocking the analysis).
  */
 import { OllamaMessage, OllamaStalledError, ollamaChat, withoutReferences } from './ollama';
-import { Sentence, dedupe, formatExcerpts, hasForeignScript, selectSentences, splitSentences } from './retrieval';
+import { Sentence, cleanPointText, dedupe, formatExcerpts, goodArabicTranslation, numbersSupported, selectSentences, splitSentences } from './retrieval';
 
 const SECTIONS: { id: number; ar: string; en: string; focus: string }[] = [
   { id: 1, ar: 'نظرة عامة على الورقة', en: 'Paper Overview', focus: 'what the paper is about: its topic, approach and setting' },
@@ -82,10 +82,12 @@ Rules:
 - Copy numbers exactly and keep each number with its correct label.
 - "evidence": the id (like S12) of the excerpt that best supports the point.
 - "type": "explicit" if that excerpt states it directly, "inferred" if it is your own judgement.
-- Never mention anything that is not in the excerpts.`;
+- Never mention anything that is not in the excerpts. Every number you write must appear in the excerpt you cite.
+- Do not write excerpt ids (like S12) or page numbers inside "text".`;
 
 const SYSTEM_TRANSLATOR = `You translate academic English into clear, formal Arabic (Modern Standard Arabic).
-Rules: write only Arabic script, except that names of methods, models, datasets, software, metrics and all numbers stay exactly as in English (e.g. LSTM-AE, AUC, 97.31%). Keep the meaning exact. Return one translation per input sentence, in the same order.`;
+Rules: write only Arabic script, except that names of methods, models, datasets, software, metrics and all numbers stay exactly as in English (e.g. LSTM-AE, AUC, 97.31%). Never mix English letters into an Arabic word. Keep the meaning exact. Return one translation per input sentence, in the same order.
+Glossary: instance(s) = حالة/حالات; anomaly = شذوذ; anomaly detection = كشف الشذوذ; labeled data = بيانات مصنّفة; unlabeled = غير مصنّفة; semi-supervised = شبه خاضع للإشراف; supervised = خاضع للإشراف; autoencoder = المرمّز التلقائي; encoder = المشفّر; decoder = مفكّك الترميز; reconstruction error = خطأ إعادة البناء; threshold = عتبة; dataset = مجموعة البيانات; training = التدريب; evaluation = التقييم; framework = إطار عمل; deep learning = التعلّم العميق; machine learning = تعلّم الآلة; accuracy = الدقة; performance = الأداء; consumers = المستهلكون; customers = العملاء; participants = المشاركون; sample = عينة; hypothesis = فرضية; limitation = قيد; robustness = المتانة; scalability = قابلية التوسّع; cloud = السحابة; electricity theft = سرقة الكهرباء; non-technical losses = الخسائر غير الفنية.`;
 
 export interface LocalProgress {
   stage: 'reading' | 'writing';
@@ -193,8 +195,7 @@ export async function analyzeLocally(
     const out: string[] = Array.isArray(res?.translations) ? res.translations : [];
     return texts.map((en, i) => {
       const ar = (out[i] || '').trim();
-      const looksArabic = /[؀-ۿ]/.test(ar);
-      return ar && looksArabic && !hasForeignScript(ar) ? ar : en;
+      return goodArabicTranslation(en, ar) ? ar : en;
     });
   };
 
@@ -261,7 +262,28 @@ export async function analyzeLocally(
         };
       }
       const raw = (Array.isArray(res.points) ? res.points : []).filter((p: any) => p && typeof p.text === 'string' && p.text.trim());
-      const grounded = dedupe(raw.filter((p: any) => p.evidence !== NOT_STATED && byId.has(p.evidence)));
+      // Keep points that cite a real excerpt, strip ids from the text, and drop points whose
+      // numbers are not in the sentence they cite (small models sometimes invent numbers).
+      const cited = raw
+        .filter((p: any) => p.evidence !== NOT_STATED && byId.has(p.evidence))
+        .map((p: any) => ({ ...p, text: cleanPointText(p.text) }))
+        .filter((p: any) => p.text.length > 10);
+      const grounded = dedupe(cited.filter((p: any) => numbersSupported(p.text, byId.get(p.evidence)!.text)));
+      if (cited.length > 0 && grounded.length === 0) {
+        return {
+          failed: true,
+          points: [
+            {
+              text: isAr
+                ? 'لم يتمكن النموذج المحلي من استخراج نقاط موثوقة لهذا القسم. جرّب وضع «دقيق» أو أعد التحليل.'
+                : 'The local model could not extract reliable points for this section. Try the Accurate mode or retry.',
+              page: 1,
+              type: 'inferred',
+              quote: '',
+            },
+          ],
+        };
+      }
       const texts = await toArabic(grounded.map((p: any) => p.text.trim()));
       return {
         failed: false,

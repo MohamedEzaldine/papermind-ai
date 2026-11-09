@@ -37,3 +37,26 @@ console.log('PASS  near-duplicate points removed');
 assert.equal(hasForeignScript('كشف سرقة الكهرباء في كипري'), true);
 assert.equal(hasForeignScript('حقق نموذج LSTM-AE دقة 97.31%'), false);
 console.log('PASS  broken-script translations detected');
+
+import { cleanPointText, numbersSupported, goodArabicTranslation } from './retrieval';
+assert.equal(
+  cleanPointText('The dataset contains 42372 customers over 1035 days (S51 | p.2, S63 | p.2).'),
+  'The dataset contains 42372 customers over 1035 days.'
+);
+assert.equal(cleanPointText('حقق النموذج دقة 97.14٪ (س118).'), 'حقق النموذج دقة 97.14٪.');
+assert.equal(cleanPointText('1. الثبات: نتائج عالية (ص: 56 | صفحه 2)'), 'الثبات: نتائج عالية');
+console.log('PASS  excerpt ids and numbering removed from point text');
+
+const ev = 'The evaluation uses a dataset with 1035 days, 3574 non-theft and 36666 theft consumers.';
+assert.equal(numbersSupported('The dataset covers 1035 days and 36,666 theft consumers.', ev), true);
+assert.equal(numbersSupported('The dataset covers 9,655 consumers over 147 weeks.', ev), false);
+assert.equal(numbersSupported('Three architectures were compared.', ev), true);
+console.log('PASS  invented numbers detected against the cited sentence');
+
+const en = 'LSTM-AE achieved the best AUC of 0.812 on the labeled dataset.';
+assert.equal(goodArabicTranslation(en, 'حقق نموذج LSTM-AE أفضل قيمة AUC بلغت 0.812 على مجموعة البيانات المصنفة.'), true);
+assert.equal(goodArabicTranslation(en, 'حقق نموذج LSTM-AE أفضل desekte بلغت 0.812.'), false);
+assert.equal(goodArabicTranslation(en, 'البيانات المcollected لنموذج LSTM-AE بلغت 0.812.'), false);
+assert.equal(goodArabicTranslation(en, 'حقق نموذج LSTM-AE أفضل قيمة AUC بلغت 0.92.'), false);
+assert.equal(goodArabicTranslation(en, 'سرقة في кипри 0.812'), false);
+console.log('PASS  bad translations rejected, good ones kept');

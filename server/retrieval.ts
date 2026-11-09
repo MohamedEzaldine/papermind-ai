@@ -104,3 +104,50 @@ export function dedupe<T extends { text: string }>(points: T[]): T[] {
 export function hasForeignScript(text: string): boolean {
   return /[Ѐ-ӿͰ-Ͽ぀-ヿ一-鿿가-힯฀-๿]/.test(text);
 }
+
+/**
+ * Remove artifacts small models leave in point text: excerpt ids and page tags such as
+ * "(S51 | p.2)", "(س64)", "(ص: 56 | صفحه 2)", and list numbering like "1. ".
+ */
+export function cleanPointText(text: string): string {
+  return text
+    .replace(/[([]\s*(?:[Sس]\s*\d+|ص\s*[:.]?\s*\d+|p\.?\s*\d+|صفح[ةه]\s*\d+)[^)\]]*[)\]]/gi, '')
+    .replace(/\b[Sس]\d+\b/g, '')
+    .replace(/^\s*\d+[.)-]\s+/, '')
+    .replace(/\s+([.,،؛:])/g, '$1')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+}
+
+/** Numbers in a text, ignoring small counts (1-10) that are usually words like "three models". */
+export function significantNumbers(text: string): string[] {
+  const latin = text.replace(/[٠-٩]/g, (d) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(d))).replace(/٫/g, '.').replace(/٬/g, ',');
+  const nums = (latin.match(/\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?/g) || []).map((n) =>
+    n.replace(/,/g, '')
+  );
+  return nums.filter((n) => !(Number.isInteger(Number(n)) && Number(n) <= 10));
+}
+
+/** True if every significant number in the point appears in its evidence sentence. */
+export function numbersSupported(pointText: string, evidence: string): boolean {
+  const have = new Set(significantNumbers(evidence));
+  return significantNumbers(pointText).every((n) => have.has(n));
+}
+
+/**
+ * Check a machine translation into Arabic. Rejects translations that:
+ *  - contain broken scripts (Cyrillic, CJK...),
+ *  - glue Latin letters onto Arabic letters ("المcollected"),
+ *  - contain Latin words that are not in the English source (invented words like "desekte"),
+ *  - change, drop or add numbers.
+ */
+export function goodArabicTranslation(english: string, arabic: string): boolean {
+  if (!arabic || !/[؀-ۿ]/.test(arabic) || hasForeignScript(arabic)) return false;
+  if (/[؀-ۿ][A-Za-z]|[A-Za-z][؀-ۿ]/.test(arabic)) return false;
+  const sourceWords = new Set((english.toLowerCase().match(/[a-z][a-z0-9-]*/g) || []).map((w) => w.replace(/s$/, '')));
+  const latinWords = arabic.toLowerCase().match(/[a-z][a-z0-9-]*/g) || [];
+  if (latinWords.some((w) => !sourceWords.has(w) && !sourceWords.has(w.replace(/s$/, '')))) return false;
+  const a = significantNumbers(arabic).sort().join(',');
+  const e = significantNumbers(english).sort().join(',');
+  return a === e;
+}
