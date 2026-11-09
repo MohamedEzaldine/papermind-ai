@@ -1,88 +1,94 @@
 /**
- * Section-by-section analysis on a local Ollama model.
+ * Section-by-section analysis on a local Ollama model, designed for small models on
+ * ordinary computers (no graphics card).
  *
- * One huge JSON answer is slow on computers without a graphics card, and small models can
- * get stuck in it (endless whitespace or repetition). Instead the paper is analyzed in 11
- * short requests: the overview, then each of the 10 sections. Every request:
- *  - starts with the same system message (instructions + paper text), so Ollama reuses the
- *    paper it already read instead of reading it again,
- *  - asks for at most 3 short points with a size-limited JSON schema and an answer-length cap,
- *  - is watched for stalls and retried once; a section that still fails is marked as
- *    unavailable instead of blocking the whole analysis.
+ * For each of the 10 sections:
+ *  1. The server picks the ~12 most relevant sentences of the paper (server/retrieval.ts).
+ *  2. The model writes up to 3 short points in English and cites the supporting sentence by
+ *     its id. The quote and page shown to the user are taken from that sentence, so they
+ *     always come from the paper.
+ *  3. For Arabic, a second short request translates the points; any translation with
+ *     broken script falls back to the English text.
+ * Every request is size-capped and watched for stalls (retried once; a section that still
+ * fails is reported as such instead of blocking the analysis).
  */
-import { OllamaMessage, OllamaStalledError, contextFor, ollamaChat, paperAsText, withoutReferences } from './ollama';
+import { OllamaMessage, OllamaStalledError, ollamaChat, withoutReferences } from './ollama';
+import { Sentence, dedupe, formatExcerpts, hasForeignScript, selectSentences, splitSentences } from './retrieval';
 
 const SECTIONS: { id: number; ar: string; en: string; focus: string }[] = [
-  { id: 1, ar: 'نظرة عامة على الورقة', en: 'Paper Overview', focus: 'what the paper is about, its scope and approach' },
-  { id: 2, ar: 'المشكلة البحثية والفجوة المعرفية', en: 'Research Problem & Gap', focus: 'the research problem and the gap in prior work it addresses' },
-  { id: 3, ar: 'الأهداف، الأسئلة البحثية والفرضيات', en: 'Objectives, Research Questions & Hypotheses', focus: 'the objectives, research questions and hypotheses' },
-  { id: 4, ar: 'المساهمات العلمية الرئيسية', en: 'Main Contributions', focus: 'the main contributions claimed by the authors' },
-  { id: 5, ar: 'المنهجية العلمية', en: 'Methodology', focus: 'the methodology, method design and procedure' },
-  { id: 6, ar: 'البيانات، الأدوات، والنماذج', en: 'Data, Tools & Models', focus: 'the datasets (with exact sizes), tools, software and models used' },
-  { id: 7, ar: 'النتائج والمناقشة', en: 'Results & Discussion', focus: 'the key results with their exact numbers and metrics, and how they are discussed' },
-  { id: 8, ar: 'محددات وقصور البحث', en: 'Limitations', focus: 'limitations stated by the authors or evident from the design' },
-  { id: 9, ar: 'التقييم النقدي (نقاط القوة والضعف)', en: 'Critical Evaluation (Strengths & Weaknesses)', focus: 'a critical evaluation: give strengths and weaknesses; set category to "strength" or "weakness" for every point' },
-  { id: 10, ar: 'آفاق وتوجهات البحث المستقبلي', en: 'Future Research Directions', focus: 'future research directions stated or implied' },
+  { id: 1, ar: 'نظرة عامة على الورقة', en: 'Paper Overview', focus: 'what the paper is about: its topic, approach and setting' },
+  { id: 2, ar: 'المشكلة البحثية والفجوة المعرفية', en: 'Research Problem & Gap', focus: 'the problem the paper addresses and what is missing or weak in previous work' },
+  { id: 3, ar: 'الأهداف، الأسئلة البحثية والفرضيات', en: 'Objectives, Research Questions & Hypotheses', focus: 'what the authors aim to achieve, the questions they ask and any assumptions or hypotheses' },
+  { id: 4, ar: 'المساهمات العلمية الرئيسية', en: 'Main Contributions', focus: 'the main contributions the authors claim' },
+  { id: 5, ar: 'المنهجية العلمية', en: 'Methodology', focus: 'how the method works: models, steps, decision rules and design choices' },
+  { id: 6, ar: 'البيانات، الأدوات، والنماذج', en: 'Data, Tools & Models', focus: 'the datasets with their exact sizes and periods, and the tools, software and models used' },
+  { id: 7, ar: 'النتائج والمناقشة', en: 'Results & Discussion', focus: 'the key results with their exact numbers, and how the authors interpret them' },
+  { id: 8, ar: 'محددات وقصور البحث', en: 'Limitations', focus: 'limitations, constraints and weak points of the study (stated by the authors or evident from the excerpts)' },
+  { id: 9, ar: 'التقييم النقدي (نقاط القوة والضعف)', en: 'Critical Evaluation (Strengths & Weaknesses)', focus: 'a critical evaluation: at least one strength and at least one weakness of the study' },
+  { id: 10, ar: 'آفاق وتوجهات البحث المستقبلي', en: 'Future Research Directions', focus: 'future work the authors plan or that naturally follows from the study' },
 ];
 
-const pointSchema = (critical: boolean) => ({
-  type: 'object',
-  properties: {
-    points: {
-      type: 'array',
-      minItems: 1,
-      maxItems: 3,
-      items: {
-        type: 'object',
-        properties: {
-          text: { type: 'string', maxLength: 260 },
-          page: { type: 'integer' },
-          type: { type: 'string', enum: ['explicit', 'inferred'] },
-          quote: { type: 'string', maxLength: 200 },
-          ...(critical ? { category: { type: 'string', enum: ['strength', 'weakness'] } } : {}),
+const NOT_STATED = 'NOT_IN_PAPER';
+
+function sectionSchema(ids: string[], critical: boolean) {
+  return {
+    type: 'object',
+    properties: {
+      points: {
+        type: 'array',
+        minItems: 1,
+        maxItems: 3,
+        items: {
+          type: 'object',
+          properties: {
+            text: { type: 'string', maxLength: 240 },
+            evidence: { type: 'string', enum: [...ids, NOT_STATED] },
+            type: { type: 'string', enum: ['explicit', 'inferred'] },
+            ...(critical ? { category: { type: 'string', enum: ['strength', 'weakness'] } } : {}),
+          },
+          required: ['text', 'evidence', 'type', ...(critical ? ['category'] : [])],
         },
-        required: ['text', 'page', 'type', 'quote', ...(critical ? ['category'] : [])],
       },
     },
-  },
-  required: ['points'],
-});
+    required: ['points'],
+  };
+}
 
 const overviewSchema = {
   type: 'object',
   properties: {
     title: { type: 'string', maxLength: 300 },
-    authors: { type: 'array', maxItems: 12, items: { type: 'string', maxLength: 60 } },
+    authors: { type: 'array', maxItems: 15, items: { type: 'string', maxLength: 60 } },
     year: { type: 'string', maxLength: 10 },
     venue: { type: 'string', maxLength: 200 },
-    field: { type: 'string', maxLength: 120 },
-    summary: { type: 'string', maxLength: 700 },
+    field: { type: 'string', maxLength: 100 },
+    summary: { type: 'string', maxLength: 600 },
   },
   required: ['title', 'authors', 'year', 'venue', 'field', 'summary'],
 };
 
-/** Parse JSON, falling back to rescuing complete point objects from a cut-off answer. */
-function parseLenient(text: string): any {
-  try {
-    return JSON.parse(text);
-  } catch {
-    const points = [...text.matchAll(/\{[^{}]*"text"[^{}]*\}/g)]
-      .map((m) => {
-        try {
-          return JSON.parse(m[0]);
-        } catch {
-          return null;
-        }
-      })
-      .filter(Boolean);
-    return points.length ? { points } : null;
-  }
-}
+const translationSchema = (n: number) => ({
+  type: 'object',
+  properties: {
+    translations: { type: 'array', minItems: n, maxItems: n, items: { type: 'string', maxLength: 400 } },
+  },
+  required: ['translations'],
+});
+
+const SYSTEM_ANALYST = `You are an expert academic peer reviewer.
+Use ONLY the numbered excerpts from the paper that the user gives you.
+Rules:
+- Write each point as one clear English sentence (max 30 words). Do not repeat the same idea twice.
+- Copy numbers exactly and keep each number with its correct label.
+- "evidence": the id (like S12) of the excerpt that best supports the point.
+- "type": "explicit" if that excerpt states it directly, "inferred" if it is your own judgement.
+- Never mention anything that is not in the excerpts.`;
+
+const SYSTEM_TRANSLATOR = `You translate academic English into clear, formal Arabic (Modern Standard Arabic).
+Rules: write only Arabic script, except that names of methods, models, datasets, software, metrics and all numbers stay exactly as in English (e.g. LSTM-AE, AUC, 97.31%). Keep the meaning exact. Return one translation per input sentence, in the same order.`;
 
 export interface LocalProgress {
-  /** 'reading' until the model starts writing the first part. */
   stage: 'reading' | 'writing';
-  /** Parts finished, out of 11 (overview + 10 sections). */
   partsDone: number;
   partsTotal: number;
   sectionTitle?: string;
@@ -98,146 +104,196 @@ export async function analyzeLocally(
   onProgress: (p: LocalProgress) => void
 ): Promise<{ overview: any; sections: any[]; model: string; truncatedAfterPage?: number; stats: object }> {
   const isAr = language === 'ar';
-  const pagesForModel = withoutReferences(rawPages);
-  const paper = paperAsText(pagesForModel);
+  const pages = withoutReferences(rawPages);
+  const sentences = splitSentences(pages);
+  const byId = new Map(sentences.map((s) => [s.id, s]));
 
-  // Identical in every request, so Ollama keeps the paper in its cache after the first read.
-  const system = `You are an expert academic peer reviewer. Analyze ONLY the research paper text below.
-Rules:
-- Write every "text" and "summary" in ${isAr ? 'Arabic (formal academic Arabic)' : 'English'}.
-- Never invent facts, numbers, authors or citations. Copy numbers exactly and keep each number with its correct label.
-- "page": the number from the [Page N] marker where the evidence appears.
-- "type": "explicit" if the paper states it directly, "inferred" if it is your interpretation.
-- "quote": a short verbatim quote copied from the paper in its original language (do not translate).
-- Be concise: each point is one sentence.
-=== PAPER TEXT ===${paper.text}
-=== END OF PAPER ===`;
-
-  const numCtx = contextFor(system.length, 900);
   const partsTotal = SECTIONS.length + 1;
   let partsDone = 0;
   let usedModel = model || '';
   let writingStarted = false;
   let tokens = 0;
   let writingSeconds = 0;
+  let partFirstTokenAt = 0;
   const partDurations: number[] = [];
+  let currentTitle: string | undefined;
 
-  let partFirstTokenAt = 0; // first token of the part in progress, for the live speed
-  const report = (sectionTitle?: string) => {
+  const report = () => {
     const liveSeconds = writingSeconds + (partFirstTokenAt ? (Date.now() - partFirstTokenAt) / 1000 : 0);
-    const avg = partDurations.length > 1 ? partDurations.slice(1).reduce((a, b) => a + b, 0) / (partDurations.length - 1) : partDurations[0];
+    const avg = partDurations.length ? partDurations.reduce((a, b) => a + b, 0) / partDurations.length : 0;
     onProgress({
       stage: writingStarted ? 'writing' : 'reading',
       partsDone,
       partsTotal,
-      sectionTitle,
+      sectionTitle: currentTitle,
       etaSeconds: avg ? Math.round(avg * (partsTotal - partsDone)) : null,
       tokensPerSecond: liveSeconds > 1 ? +(tokens / liveSeconds).toFixed(1) : undefined,
-      pages: paper.pagesIncluded,
+      pages: pages.length,
     });
   };
 
-  /** Run one part, retrying once if the model stalls or returns unusable JSON. */
-  const ask = async (instruction: string, schema: object, numPredict: number, label: string) => {
+  /** One short request to the model, retried once if it stalls or returns unusable JSON. */
+  const ask = async (system: string, user: string, schema: object, numPredict: number): Promise<any | null> => {
     for (let attempt = 1; attempt <= 2; attempt++) {
-      const started = Date.now();
       let partFirstToken = 0;
       let lastReport = 0;
       try {
         const messages: OllamaMessage[] = [
           { role: 'system', content: system },
-          { role: 'user', content: instruction },
+          { role: 'user', content: user },
         ];
         const res = await ollamaChat(messages, schema, {
           model,
-          numCtx,
+          numCtx: 4096,
           numPredict,
-          // The first part also reads the paper, which can take many minutes on a slow PC;
-          // the watchdog only counts time after the first token.
-          stallSeconds: 90,
+          stallSeconds: 60,
           onFirstToken: () => {
             partFirstToken = Date.now();
             partFirstTokenAt = partFirstToken;
             if (!writingStarted) {
               writingStarted = true;
-              report(label);
+              report();
             }
           },
           onProgress: () => {
             tokens++;
-            const now = Date.now();
-            if (now - lastReport > 1500) {
-              lastReport = now;
-              report(label);
+            if (Date.now() - lastReport > 1500) {
+              lastReport = Date.now();
+              report();
             }
           },
         });
         usedModel = res.model;
         if (partFirstToken) writingSeconds += (Date.now() - partFirstToken) / 1000;
         partFirstTokenAt = 0;
-        partDurations.push((Date.now() - started) / 1000);
-        const parsed = parseLenient(res.text);
-        if (parsed) return parsed;
-        console.warn(`Local analysis: unusable JSON for "${label}" (attempt ${attempt})`);
+        try {
+          return JSON.parse(res.text);
+        } catch {
+          console.warn(`Local analysis: unusable JSON (attempt ${attempt})`);
+        }
       } catch (e) {
         if (partFirstToken) writingSeconds += (Date.now() - partFirstToken) / 1000;
         partFirstTokenAt = 0;
         if (!(e instanceof OllamaStalledError)) throw e;
-        console.warn(`Local analysis: "${label}" stalled (attempt ${attempt})`);
+        console.warn(`Local analysis: request stalled (attempt ${attempt})`);
       }
     }
     return null;
   };
 
-  report();
-  const overview =
-    (await ask(
-      `Give the paper overview as JSON: title, authors, year, venue (journal or conference), field, and a 2-3 sentence summary${isAr ? ' in Arabic' : ''}.`,
-      overviewSchema,
-      450,
-      isAr ? 'نظرة عامة' : 'Overview'
-    )) || { title: '', authors: [], year: '', venue: '', field: '', summary: '' };
-  partsDone++;
+  /** Translate English sentences to Arabic; keeps the English text for any bad translation. */
+  const toArabic = async (texts: string[]): Promise<string[]> => {
+    if (!isAr || texts.length === 0) return texts;
+    const res = await ask(
+      SYSTEM_TRANSLATOR,
+      `Translate these ${texts.length} sentences:\n${texts.map((t, i) => `${i + 1}. ${t}`).join('\n')}`,
+      translationSchema(texts.length),
+      Math.min(900, 160 * texts.length)
+    );
+    const out: string[] = Array.isArray(res?.translations) ? res.translations : [];
+    return texts.map((en, i) => {
+      const ar = (out[i] || '').trim();
+      const looksArabic = /[؀-ۿ]/.test(ar);
+      return ar && looksArabic && !hasForeignScript(ar) ? ar : en;
+    });
+  };
 
+  // --- Overview: from the first page (title, authors and abstract are there) ---
+  const timed = async <T,>(fn: () => Promise<T>): Promise<T> => {
+    const started = Date.now();
+    const r = await fn();
+    partDurations.push((Date.now() - started) / 1000);
+    return r;
+  };
+
+  currentTitle = isAr ? 'نظرة عامة' : 'Overview';
+  report();
+  const firstPage = (pages[0] || '').slice(0, 3500);
+  const overview = await timed(async () => {
+    const o =
+      (await ask(
+        'You extract bibliographic details from the first page of a research paper. Copy the title, author names and venue exactly as written (do not translate them).',
+        `First page of the paper:\n${firstPage}\n\nReturn: title, authors, year, venue (journal or conference), field (2-6 English words), and summary (2 English sentences about what the paper does and finds).`,
+        overviewSchema,
+        420
+      )) || { title: '', authors: [], year: '', venue: '', field: '', summary: '' };
+    if (isAr) {
+      const [field, summary] = await toArabic([o.field || '', o.summary || ''].map(String));
+      o.field = field;
+      o.summary = summary;
+    }
+    return o;
+  });
+  partsDone++;
+  report();
+
+  // --- The 10 sections ---
   const sections: any[] = [];
   for (const sec of SECTIONS) {
-    const title = isAr ? sec.ar : sec.en;
-    report(title);
-    const result = await ask(
-      `Section "${sec.en}": give up to 3 points about ${sec.focus}. If the paper does not address this at all, return one point with text "${
-        isAr ? 'غير مذكور في الورقة البحثية' : 'Not stated in the paper'
-      }", page 1, type "inferred", quote "".`,
-      pointSchema(sec.id === 9),
-      sec.id === 9 ? 520 : 420,
-      title
-    );
-    const points = Array.isArray(result?.points) ? result.points.filter((p: any) => p && typeof p.text === 'string') : [];
-    if (!result) {
-      // The model failed twice on this section: say so plainly instead of claiming the paper is silent.
-      points.push({
-        text: isAr
-          ? 'تعذر تحليل هذا القسم على هذا الجهاز. أعد التحليل أو جرّب وضعاً آخر.'
-          : 'This section could not be analyzed on this computer. Retry, or try another mode.',
-        page: 1,
-        type: 'inferred',
-        quote: '',
-      });
-    }
-    const notStated = !!result && (points.length === 0 || (points.length === 1 && /غير مذكور|not stated/i.test(points[0].text)));
-    sections.push({ id: sec.id, title, isNotStated: notStated, points: notStated ? [] : points });
+    currentTitle = isAr ? sec.ar : sec.en;
+    report();
+    const excerpts: Sentence[] = selectSentences(sentences, sec.id, 12);
+    const ids = excerpts.map((s) => s.id);
+    const critical = sec.id === 9;
+
+    const section = await timed(async () => {
+      const res = await ask(
+        SYSTEM_ANALYST,
+        `Excerpts from the paper:\n${formatExcerpts(excerpts)}\n\nTask: give up to 3 distinct points about ${sec.focus}.${
+          critical ? ' Set "category" to "strength" or "weakness" for each point.' : ''
+        } Only if the excerpts say nothing about this, return one point with evidence "${NOT_STATED}".`,
+        sectionSchema(ids, critical),
+        critical ? 380 : 320
+      );
+      if (!res) {
+        return {
+          failed: true,
+          points: [
+            {
+              text: isAr
+                ? 'تعذر تحليل هذا القسم على هذا الجهاز. أعد التحليل أو جرّب وضعاً آخر.'
+                : 'This section could not be analyzed on this computer. Retry, or try another mode.',
+              page: 1,
+              type: 'inferred',
+              quote: '',
+            },
+          ],
+        };
+      }
+      const raw = (Array.isArray(res.points) ? res.points : []).filter((p: any) => p && typeof p.text === 'string' && p.text.trim());
+      const grounded = dedupe(raw.filter((p: any) => p.evidence !== NOT_STATED && byId.has(p.evidence)));
+      const texts = await toArabic(grounded.map((p: any) => p.text.trim()));
+      return {
+        failed: false,
+        points: grounded.map((p: any, i: number) => {
+          const s = byId.get(p.evidence)!;
+          return {
+            text: texts[i],
+            page: s.page,
+            type: p.type === 'explicit' ? 'explicit' : 'inferred',
+            // The quote is the paper's own sentence, so it is always genuine.
+            quote: s.text.length > 260 ? s.text.slice(0, 260).replace(/\s+\S*$/, '') + '…' : s.text,
+            ...(critical ? { category: p.category === 'strength' ? 'strength' : 'weakness' } : {}),
+          };
+        }),
+      };
+    });
+
+    const notStated = !section.failed && section.points.length === 0;
+    sections.push({ id: sec.id, title: currentTitle, isNotStated: notStated, points: section.points });
     partsDone++;
-    report(title);
+    report();
   }
 
   return {
     overview,
     sections,
     model: usedModel,
-    truncatedAfterPage: paper.truncated ? paper.pagesIncluded : undefined,
     stats: {
       tokensPerSecond: writingSeconds > 0 ? +(tokens / writingSeconds).toFixed(1) : undefined,
       parts: partDurations.map((d) => Math.round(d)),
-      referencesRemoved: pagesForModel.length < rawPages.length || pagesForModel.at(-1) !== rawPages[pagesForModel.length - 1],
+      sentences: sentences.length,
+      referencesRemoved: pages.length < rawPages.length || pages.at(-1) !== rawPages[pages.length - 1],
     },
   };
 }

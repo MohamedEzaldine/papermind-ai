@@ -10,7 +10,7 @@
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",
-    "test": "tsx server/evidence.test.ts && tsx server/ollama.test.ts",
+    "test": "tsx server/evidence.test.ts && tsx server/ollama.test.ts && tsx server/retrieval.test.ts",
     "build:desktop-server": "esbuild server.ts --bundle --platform=node --format=esm --target=node20 --outfile=electron/server.mjs --external:vite --external:electron \"--banner:js=import { createRequire } from 'module'; const require = createRequire(import.meta.url);\"",
     "desktop": "npm run build && npm run build:desktop-server && electron .",
     "dist:win": "npm run build && npm run build:desktop-server && electron-builder --win nsis --publish never"
