@@ -43,6 +43,8 @@ export const UploadPage: React.FC<UploadPageProps> = ({
     etaSeconds: number | null;
     sectionsDone: number;
     pages?: number;
+    sectionTitle?: string;
+    tokensPerSecond?: number;
   }>({ stage: 'extract', percent: 2, etaSeconds: null, sectionsDone: 0 });
   // Which installed local model to use (remembered on this device; also used by Ask the Paper).
   const [selectedModel, setSelectedModel] = useState<string>(() => {
@@ -210,6 +212,8 @@ export const UploadPage: React.FC<UploadPageProps> = ({
               percent: ev.percent,
               etaSeconds: ev.etaSeconds,
               sectionsDone: ev.sectionsDone,
+              sectionTitle: ev.sectionTitle ?? p.sectionTitle,
+              tokensPerSecond: ev.tokensPerSecond ?? p.tokensPerSecond,
             }));
           } else if (ev.type === 'result') {
             result = ev.data;
@@ -391,9 +395,13 @@ export const UploadPage: React.FC<UploadPageProps> = ({
                         ? `النموذج يقرأ الورقة${progress.pages ? ` (${progress.pages} صفحات)` : ''}…`
                         : `The model is reading the paper${progress.pages ? ` (${progress.pages} pages)` : ''}…`)}
                     {progress.stage === 'writing' &&
-                      (isAr
-                        ? `جارِ كتابة التحليل — القسم ${Math.min(10, progress.sectionsDone + 1)} من 10`
-                        : `Writing the analysis — section ${Math.min(10, progress.sectionsDone + 1)} of 10`)}
+                      (progress.sectionTitle
+                        ? isAr
+                          ? `جارِ تحليل: ${progress.sectionTitle}`
+                          : `Analyzing: ${progress.sectionTitle}`
+                        : isAr
+                          ? `جارِ كتابة التحليل — القسم ${Math.min(10, progress.sectionsDone + 1)} من 10`
+                          : `Writing the analysis — section ${Math.min(10, progress.sectionsDone + 1)} of 10`)}
                   </span>
                   <span className="text-sm font-extrabold text-[#3F3D9E] dark:text-indigo-300 tabular-nums">
                     {progress.percent}%
@@ -441,6 +449,12 @@ export const UploadPage: React.FC<UploadPageProps> = ({
                 {/* Elapsed time, with a reassurance note for the local engine */}
                 <div className="flex flex-wrap items-center justify-between gap-2 pt-1 text-xs text-slate-500 dark:text-slate-400">
                   <span className="tabular-nums">
+                    {progress.stage === 'writing' && (
+                      <span className="me-3">
+                        {isAr ? `الأقسام المنجزة: ${progress.sectionsDone} من 10` : `Sections done: ${progress.sectionsDone} of 10`}
+                        {progress.tokensPerSecond ? (isAr ? ` · السرعة: ${progress.tokensPerSecond} وحدة/ث` : ` · speed: ${progress.tokensPerSecond} tokens/s`) : ''}
+                      </span>
+                    )}
                     {isAr ? 'المنقضي: ' : 'Elapsed: '}
                     <span className="font-mono" dir="ltr">
                       {Math.floor(elapsed / 60)}:{String(elapsed % 60).padStart(2, '0')}

@@ -29,15 +29,34 @@ export interface OllamaMessage {
 export class OllamaUnavailableError extends Error {}
 /** Ollama is running but has no usable chat model installed. */
 export class OllamaModelMissingError extends Error {}
+/** The model stopped producing useful output (e.g. stuck repeating whitespace) and was stopped. */
+export class OllamaStalledError extends Error {}
+
+/**
+ * Cut the reference list (it is often a quarter of a paper and adds nothing to the analysis,
+ * but costs a lot of reading time on computers without a graphics card).
+ */
+export function withoutReferences(rawPages: string[]): string[] {
+  const heading = /(?:^|\n)\s*(?:\d+\.?\s*)?(references|bibliography|literature cited|works cited|المراجع|قائمة المراجع)\s*(?:\n|$)/gi;
+  for (let i = rawPages.length - 1; i >= 1; i--) {
+    const matches = [...rawPages[i].matchAll(heading)];
+    if (matches.length > 0) {
+      const cut = matches[matches.length - 1].index!;
+      return [...rawPages.slice(0, i), rawPages[i].slice(0, cut)];
+    }
+  }
+  return rawPages;
+}
 
 /** Turn the paper's pages into one text with page markers, trimmed to fit the context window. */
-export function paperAsText(rawPages: string[]): { text: string; truncated: boolean; pagesIncluded: number } {
+export function paperAsText(rawPages: string[], maxChars = MAX_PAPER_CHARS): { text: string; truncated: boolean; pagesIncluded: number } {
+  const MAX_PAPER_CHARS_ = maxChars;
   let text = '';
   let pagesIncluded = 0;
   for (let i = 0; i < rawPages.length; i++) {
-    const chunk = `\n\n[Page ${i + 1}]\n${rawPages[i].replace(/\s+\n/g, '\n').trim()}`;
-    if (text.length + chunk.length > MAX_PAPER_CHARS) {
-      const room = MAX_PAPER_CHARS - text.length;
+    const chunk = `\n\n[Page ${i + 1}]\n${rawPages[i].replace(/[ \t]+/g, ' ').replace(/\s+\n/g, '\n').trim()}`;
+    if (text.length + chunk.length > MAX_PAPER_CHARS_) {
+      const room = MAX_PAPER_CHARS_ - text.length;
       if (room > 500) {
         text += chunk.slice(0, room);
         pagesIncluded++;
@@ -74,9 +93,11 @@ function request(
   path: string,
   body: object | null,
   onLine?: (line: string) => void,
-  timeoutMs = 0
+  timeoutMs = 0,
+  signal?: AbortSignal
 ): Promise<{ status: number; text: string }> {
   return new Promise((resolve, reject) => {
+    let aborted = false;
     const url = new URL(OLLAMA_HOST + path);
     const lib = url.protocol === 'https:' ? https : http;
     const payload = body ? JSON.stringify(body) : undefined;
@@ -113,7 +134,19 @@ function request(
     if (timeoutMs > 0) {
       req.setTimeout(timeoutMs, () => req.destroy(new Error('timeout')));
     }
-    req.on('error', (e: any) => reject(new OllamaUnavailableError(`Cannot reach Ollama at ${OLLAMA_HOST}: ${e?.code || e?.message || e}`)));
+    if (signal) {
+      const onAbort = () => {
+        aborted = true;
+        req.destroy();
+        reject(signal.reason instanceof Error ? signal.reason : new OllamaStalledError('aborted'));
+      };
+      if (signal.aborted) onAbort();
+      else signal.addEventListener('abort', onAbort, { once: true });
+    }
+    req.on('error', (e: any) => {
+      if (aborted) return;
+      reject(new OllamaUnavailableError(`Cannot reach Ollama at ${OLLAMA_HOST}: ${e?.code || e?.message || e}`));
+    });
     if (payload) req.write(payload);
     req.end();
   });
@@ -223,50 +256,92 @@ export interface OllamaStats {
 
 /**
  * Send a chat request to Ollama and return the full reply, the model used and speed stats.
- * onProgress receives the text generated so far (called for every streamed chunk).
+ *
+ * Safeguards against a model getting stuck (small models sometimes emit endless whitespace
+ * or repeat themselves under a JSON format):
+ *  - numPredict caps the answer length,
+ *  - stallSeconds stops the request when no meaningful text arrives for that long after
+ *    the first token, or when the answer ends in a long run of whitespace.
  */
 export async function ollamaChat(
   messages: OllamaMessage[],
-  format?: object,
-  opts: { model?: string; numCtx?: number; onProgress?: (textSoFar: string) => void } = {}
+  format?: object | 'json',
+  opts: {
+    model?: string;
+    numCtx?: number;
+    numPredict?: number;
+    stallSeconds?: number;
+    onProgress?: (textSoFar: string) => void;
+    onFirstToken?: () => void;
+  } = {}
 ): Promise<{ text: string; model: string; stats: OllamaStats }> {
   const model = await resolveModel(opts.model);
   const started = Date.now();
   let reply = '';
   let streamError = '';
+  let firstTokenAt = 0;
+  let lastMeaningful = 0;
   const stats: OllamaStats = {};
-  const r = await request(
-    '/api/chat',
-    {
-      model,
-      messages,
-      stream: true,
-      keep_alive: KEEP_ALIVE,
-      ...(format ? { format } : {}),
-      options: { num_ctx: opts.numCtx || NUM_CTX, temperature: 0.2 },
-    },
-    (line) => {
-      const chunk = JSON.parse(line);
-      if (chunk.error) streamError = chunk.error;
-      const piece = chunk.message?.content || '';
-      if (piece) {
-        reply += piece;
-        opts.onProgress?.(reply);
-      }
-      if (chunk.done) {
-        stats.promptTokens = chunk.prompt_eval_count;
-        stats.outputTokens = chunk.eval_count;
-        if (chunk.eval_count && chunk.eval_duration) {
-          stats.tokensPerSecond = +(chunk.eval_count / (chunk.eval_duration / 1e9)).toFixed(2);
+  const controller = new AbortController();
+  const watchdog = opts.stallSeconds
+    ? setInterval(() => {
+        if (!firstTokenAt) return;
+        const idle = (Date.now() - lastMeaningful) / 1000;
+        if (idle > opts.stallSeconds! || /\s{200,}$/.test(reply)) {
+          controller.abort(new OllamaStalledError(`Model stopped producing useful output after ${Math.round((Date.now() - started) / 1000)}s`));
         }
-        if (chunk.prompt_eval_duration) stats.readSeconds = Math.round(chunk.prompt_eval_duration / 1e9);
-      }
-    }
-  );
-  stats.totalSeconds = Math.round((Date.now() - started) / 1000);
-  if (r.status === 404) throw new OllamaModelMissingError(`Model ${model} not found: ${r.text}`);
-  if (r.status !== 200) throw new Error(`Ollama error ${r.status}: ${r.text}`);
-  if (streamError) throw new Error(`Ollama error: ${streamError}`);
-  console.log(`Ollama ${model}: ${JSON.stringify(stats)}`);
-  return { text: reply, model, stats };
+      }, 2000)
+    : undefined;
+  try {
+    const r = await request(
+      '/api/chat',
+      {
+        model,
+        messages,
+        stream: true,
+        keep_alive: KEEP_ALIVE,
+        ...(format ? { format } : {}),
+        options: {
+          num_ctx: opts.numCtx || NUM_CTX,
+          temperature: 0.2,
+          repeat_penalty: 1.1,
+          ...(opts.numPredict ? { num_predict: opts.numPredict } : {}),
+        },
+      },
+      (line) => {
+        const chunk = JSON.parse(line);
+        if (chunk.error) streamError = chunk.error;
+        const piece = chunk.message?.content || '';
+        if (piece) {
+          const now = Date.now();
+          if (!firstTokenAt) {
+            firstTokenAt = now;
+            lastMeaningful = now;
+            opts.onFirstToken?.();
+          }
+          if (/\S/.test(piece)) lastMeaningful = now;
+          reply += piece;
+          opts.onProgress?.(reply);
+        }
+        if (chunk.done) {
+          stats.promptTokens = chunk.prompt_eval_count;
+          stats.outputTokens = chunk.eval_count;
+          if (chunk.eval_count && chunk.eval_duration) {
+            stats.tokensPerSecond = +(chunk.eval_count / (chunk.eval_duration / 1e9)).toFixed(2);
+          }
+          if (chunk.prompt_eval_duration) stats.readSeconds = Math.round(chunk.prompt_eval_duration / 1e9);
+        }
+      },
+      0,
+      controller.signal
+    );
+    stats.totalSeconds = Math.round((Date.now() - started) / 1000);
+    if (r.status === 404) throw new OllamaModelMissingError(`Model ${model} not found: ${r.text}`);
+    if (r.status !== 200) throw new Error(`Ollama error ${r.status}: ${r.text}`);
+    if (streamError) throw new Error(`Ollama error: ${streamError}`);
+    console.log(`Ollama ${model}: ${JSON.stringify(stats)}`);
+    return { text: reply, model, stats };
+  } finally {
+    clearInterval(watchdog);
+  }
 }

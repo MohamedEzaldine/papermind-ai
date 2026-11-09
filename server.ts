@@ -5,6 +5,7 @@ import dotenv from 'dotenv';
 import { GoogleGenAI, Type } from '@google/genai';
 import { extractPaperText, checkPoint, PaperText } from './server/evidence';
 import { TIERS, detectHardware, preferredModels, recommendTier } from './server/hardware';
+import { analyzeLocally } from './server/localAnalysis';
 import {
   OLLAMA_HOST,
   OLLAMA_MODEL,
@@ -19,29 +20,13 @@ import {
   setPreferredModels,
   contextFor,
   paperAsText,
-  toJsonSchema,
+  withoutReferences,
 } from './server/ollama';
 
 dotenv.config();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-
-/**
- * Estimate how much of the 10-section analysis JSON has been written (0..1),
- * from the text generated so far: completed sections plus points in the current one.
- */
-function estimateProgress(partialJson: string): number {
-  const sectionStarts = [...partialJson.matchAll(/"id"\s*:/g)];
-  if (sectionStarts.length === 0) {
-    // Still writing the overview (title, authors, summary).
-    return Math.min(0.05, partialJson.length / 12000);
-  }
-  const current = partialJson.slice(sectionStarts[sectionStarts.length - 1].index);
-  const pointsInCurrent = (current.match(/"text"\s*:/g) || []).length;
-  const done = sectionStarts.length - 1 + Math.min(pointsInCurrent / 3, 0.9);
-  return Math.min(0.99, 0.05 + 0.95 * (done / 10));
-}
 
 async function startServer() {
   const app = express();
@@ -321,47 +306,29 @@ CRITICAL INSTRUCTIONS:
         if (!paperText) {
           throw new Error('Could not extract text from this PDF for the local model');
         }
-        // Local models cannot read PDFs, so they get the extracted text with [Page N] markers.
-        const paper = paperAsText(paperText.rawPages);
-        truncatedNote = { truncated: paper.truncated, pagesIncluded: paper.pagesIncluded };
-        const system =
-          systemInstruction.replace('the attached research paper PDF', 'the research paper text below') +
-          '\n8. The paper text is split by [Page N] markers. Use those numbers as page numbers.' +
-          '\n9. Be concise to keep the analysis fast: give 2 or 3 strong points per section, each point one sentence (max 30 words), and a short quote (max 20 words). Return only JSON matching the schema.';
-        const user = `${promptText}\n\n=== PAPER TEXT ===${paper.text}`;
-
-        send({ type: 'stage', stage: 'reading', pages: paper.pagesIncluded });
-        let firstTokenAt = 0;
-        let lastSent = 0;
-        const local = await ollamaChat(
-          [
-            { role: 'system', content: system },
-            { role: 'user', content: user },
-          ],
-          toJsonSchema(analysisResponseSchema),
-          {
-            model: requestedModel,
-            numCtx: contextFor(system.length + user.length, 3000),
-            onProgress: (textSoFar) => {
-              const now = Date.now();
-              if (!firstTokenAt) {
-                firstTokenAt = now;
-                send({ type: 'stage', stage: 'writing' });
-              }
-              if (now - lastSent < 1000) return;
-              lastSent = now;
-              const fraction = estimateProgress(textSoFar);
-              const genSeconds = (now - firstTokenAt) / 1000;
-              send({
-                type: 'progress',
-                percent: Math.min(99, Math.round(10 + 89 * fraction)),
-                etaSeconds: fraction > 0.06 && genSeconds > 10 ? Math.round((genSeconds / fraction) * (1 - fraction)) : null,
-                sectionsDone: Math.max(0, Math.min(10, Math.floor(fraction * 10))),
-              });
-            },
+        // Local models: section-by-section analysis of the extracted text (see server/localAnalysis.ts).
+        send({ type: 'stage', stage: 'reading' });
+        let writing = false;
+        const local = await analyzeLocally(paperText.rawPages, isArabic ? 'ar' : 'en', requestedModel, (p) => {
+          if (p.stage === 'writing' && !writing) {
+            writing = true;
+            send({ type: 'stage', stage: 'writing' });
           }
-        );
-        rawJson = local.text;
+          if (p.stage === 'reading') {
+            send({ type: 'stage', stage: 'reading', pages: p.pages });
+            return;
+          }
+          send({
+            type: 'progress',
+            percent: Math.min(99, Math.round(5 + (94 * p.partsDone) / p.partsTotal)),
+            etaSeconds: p.etaSeconds,
+            sectionsDone: Math.max(0, p.partsDone - 1),
+            sectionTitle: p.sectionTitle,
+            tokensPerSecond: p.tokensPerSecond,
+          });
+        });
+        rawJson = JSON.stringify({ overview: local.overview, sections: local.sections });
+        truncatedNote = local.truncatedAfterPage ? { truncated: true, pagesIncluded: local.truncatedAfterPage } : undefined;
         engineName = `Ollama · ${local.model}`;
         engineStats = local.stats;
       } else {
@@ -515,7 +482,7 @@ RULES:
           const extracted = await extractPaperText(
             Buffer.from(pdfBase64.replace(/^data:application\/pdf;base64,/, ''), 'base64')
           );
-          paperBlock = `\n\nThe paper text is split by [Page N] markers; cite those page numbers.\n=== PAPER TEXT ===${paperAsText(extracted.rawPages).text}`;
+          paperBlock = `\n\nThe paper text is split by [Page N] markers; cite those page numbers.\n=== PAPER TEXT ===${paperAsText(withoutReferences(extracted.rawPages)).text}`;
         }
         const chatMessages: OllamaMessage[] = [
           { role: 'system', content: systemInstruction.replace('uploaded research paper PDF', 'research paper text below') + paperBlock },
@@ -527,6 +494,8 @@ RULES:
         const local = await ollamaChat(chatMessages, undefined, {
           model: requestedModel,
           numCtx: contextFor(chatMessages.reduce((n, m) => n + m.content.length, 0), 1200),
+          numPredict: 700,
+          stallSeconds: 90,
         });
         replyText = local.text;
       } else {
