@@ -20,9 +20,19 @@ jobs:
           node-version: 22
           cache: npm
 
+      # Reuse Electron and electron-builder downloads between builds (fewer network failures, faster builds).
+      - name: Cache Electron downloads
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~\AppData\Local\electron\Cache
+            ~\AppData\Local\electron-builder\Cache
+          key: electron-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: electron-${{ runner.os }}-
+
       - name: Install dependencies (retries on network errors)
         shell: bash
-        run: npm ci || (sleep 20 && npm ci) || (sleep 60 && npm ci)
+        run: npm ci || (sleep 30 && npm ci) || (sleep 90 && npm ci) || (sleep 180 && npm ci)
 
       - name: Check types and run tests
         run: |
