@@ -130,22 +130,24 @@ async function installedModels(): Promise<string[]> {
 const sameModel = (a: string, b: string) =>
   a === b || a === `${b}:latest` || `${a}:latest` === b;
 
-/** Pick the model to use: the preferred one if installed, otherwise the best installed chat model. */
-export async function resolveModel(): Promise<string> {
+/** Pick the model to use: the requested one if installed, else the preferred one, else the best installed chat model. */
+export async function resolveModel(requested?: string): Promise<string> {
   const models = await installedModels();
-  for (const want of PREFERRED_MODELS) {
+  for (const want of requested ? [requested, ...PREFERRED_MODELS] : PREFERRED_MODELS) {
     const hit = models.find((m) => sameModel(m, want));
     if (hit) return hit;
   }
-  const chat = models.filter((m) => !/embed|bge|minilm|nomic|vision|llava/i.test(m));
+  const chat = chatModels(models);
   if (chat.length > 0) return chat[0];
   throw new OllamaModelMissingError(`No chat model installed in Ollama (wanted ${OLLAMA_MODEL})`);
 }
 
-/** Report whether Ollama is running and which model would be used. */
+const chatModels = (models: string[]) => models.filter((m) => !/embed|bge|minilm|nomic|vision|llava/i.test(m));
+
+/** Report whether Ollama is running, which model would be used, and which chat models exist. */
 export async function ollamaStatus(): Promise<{ running: boolean; modelInstalled: boolean; model: string; models: string[] }> {
   try {
-    const models = await installedModels();
+    const models = chatModels(await installedModels());
     try {
       const model = await resolveModel();
       return { running: true, modelInstalled: true, model, models };
@@ -157,28 +159,81 @@ export async function ollamaStatus(): Promise<{ running: boolean; modelInstalled
   }
 }
 
-/** Send a chat request to Ollama and return the full reply and the model that produced it. */
-export async function ollamaChat(messages: OllamaMessage[], format?: object): Promise<{ text: string; model: string }> {
-  const model = await resolveModel();
+/** How long Ollama keeps the model in memory between requests (avoids reloading it for every paper). */
+const KEEP_ALIVE = process.env.OLLAMA_KEEP_ALIVE || '30m';
+
+/** Load the model into memory ahead of time so the first analysis does not wait for it. */
+export async function ollamaWarmup(requested?: string): Promise<void> {
+  try {
+    const model = await resolveModel(requested);
+    await request('/api/generate', { model, keep_alive: KEEP_ALIVE });
+  } catch {
+    // Warm-up is best effort.
+  }
+}
+
+/** Context window just large enough for this prompt plus the answer: smaller is faster and uses less RAM. */
+export function contextFor(promptChars: number, answerTokens = 3500): number {
+  const needed = Math.ceil(promptChars / 3.2) + answerTokens;
+  return Math.min(NUM_CTX, Math.max(4096, Math.ceil(needed / 1024) * 1024));
+}
+
+export interface OllamaStats {
+  promptTokens?: number;
+  outputTokens?: number;
+  /** Generation speed in tokens per second. */
+  tokensPerSecond?: number;
+  /** Seconds spent reading the prompt before the first token. */
+  readSeconds?: number;
+  totalSeconds?: number;
+}
+
+/**
+ * Send a chat request to Ollama and return the full reply, the model used and speed stats.
+ * onProgress receives the text generated so far (called for every streamed chunk).
+ */
+export async function ollamaChat(
+  messages: OllamaMessage[],
+  format?: object,
+  opts: { model?: string; numCtx?: number; onProgress?: (textSoFar: string) => void } = {}
+): Promise<{ text: string; model: string; stats: OllamaStats }> {
+  const model = await resolveModel(opts.model);
+  const started = Date.now();
   let reply = '';
   let streamError = '';
+  const stats: OllamaStats = {};
   const r = await request(
     '/api/chat',
     {
       model,
       messages,
       stream: true,
+      keep_alive: KEEP_ALIVE,
       ...(format ? { format } : {}),
-      options: { num_ctx: NUM_CTX, temperature: 0.2 },
+      options: { num_ctx: opts.numCtx || NUM_CTX, temperature: 0.2 },
     },
     (line) => {
       const chunk = JSON.parse(line);
       if (chunk.error) streamError = chunk.error;
-      reply += chunk.message?.content || '';
+      const piece = chunk.message?.content || '';
+      if (piece) {
+        reply += piece;
+        opts.onProgress?.(reply);
+      }
+      if (chunk.done) {
+        stats.promptTokens = chunk.prompt_eval_count;
+        stats.outputTokens = chunk.eval_count;
+        if (chunk.eval_count && chunk.eval_duration) {
+          stats.tokensPerSecond = +(chunk.eval_count / (chunk.eval_duration / 1e9)).toFixed(2);
+        }
+        if (chunk.prompt_eval_duration) stats.readSeconds = Math.round(chunk.prompt_eval_duration / 1e9);
+      }
     }
   );
+  stats.totalSeconds = Math.round((Date.now() - started) / 1000);
   if (r.status === 404) throw new OllamaModelMissingError(`Model ${model} not found: ${r.text}`);
   if (r.status !== 200) throw new Error(`Ollama error ${r.status}: ${r.text}`);
   if (streamError) throw new Error(`Ollama error: ${streamError}`);
-  return { text: reply, model };
+  console.log(`Ollama ${model}: ${JSON.stringify(stats)}`);
+  return { text: reply, model, stats };
 }

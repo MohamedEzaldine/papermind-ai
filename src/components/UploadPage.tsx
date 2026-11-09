@@ -35,6 +35,22 @@ export const UploadPage: React.FC<UploadPageProps> = ({
   const [currentStage, setCurrentStage] = useState<1 | 2 | 3>(1);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [elapsed, setElapsed] = useState(0);
+  // Real progress streamed by the server while the model works.
+  const [progress, setProgress] = useState<{
+    stage: 'extract' | 'reading' | 'writing';
+    percent: number;
+    etaSeconds: number | null;
+    sectionsDone: number;
+    pages?: number;
+  }>({ stage: 'extract', percent: 2, etaSeconds: null, sectionsDone: 0 });
+  // Which installed local model to use (remembered on this device; also used by Ask the Paper).
+  const [selectedModel, setSelectedModel] = useState<string>(() => {
+    try {
+      return localStorage.getItem('papermind_model') || '';
+    } catch {
+      return '';
+    }
+  });
 
   // Elapsed-time counter while analyzing, so long local runs never look frozen.
   useEffect(() => {
@@ -45,7 +61,7 @@ export const UploadPage: React.FC<UploadPageProps> = ({
     return () => clearInterval(id);
   }, [isAnalyzing]);
 
-  const [engine, setEngine] = useState<{ provider: string; model: string; ready: boolean; running?: boolean } | null>(null);
+  const [engine, setEngine] = useState<{ provider: string; model: string; ready: boolean; running?: boolean; models?: string[] } | null>(null);
 
   // Ask the server which AI engine is active (local Ollama or Gemini) so the user knows what to expect.
   useEffect(() => {
@@ -139,13 +155,7 @@ export const UploadPage: React.FC<UploadPageProps> = ({
     setIsAnalyzing(true);
     setErrorMessage(null);
     setCurrentStage(1);
-
-    // Stage progression animation
-    const stage1Duration = 3500;
-    const stage2Duration = 7000;
-
-    const timer1 = setTimeout(() => setCurrentStage(2), stage1Duration);
-    const timer2 = setTimeout(() => setCurrentStage(3), stage1Duration + stage2Duration);
+    setProgress({ stage: 'extract', percent: 2, etaSeconds: null, sectionsDone: 0 });
 
     try {
       const response = await fetch('/api/analyze', {
@@ -158,27 +168,72 @@ export const UploadPage: React.FC<UploadPageProps> = ({
           language,
           fileName: file.name,
           fileSize: formatFileSize(file.size),
+          model: engine?.provider === 'ollama' && selectedModel ? selectedModel : undefined,
+          stream: true,
         }),
       });
 
-      clearTimeout(timer1);
-      clearTimeout(timer2);
-
-      if (!response.ok) {
+      if (!response.ok || !response.body) {
         const errorData = await response.json().catch(() => ({}));
         throw new Error(errorData.error || t.errorApiFailure);
       }
 
-      const result: AnalysisResult = await response.json();
+      // The server streams one JSON event per line: stage / progress / result / error.
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let result: AnalysisResult | null = null;
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        let nl: number;
+        while ((nl = buffer.indexOf('\n')) >= 0) {
+          const line = buffer.slice(0, nl).trim();
+          buffer = buffer.slice(nl + 1);
+          if (!line) continue;
+          const ev = JSON.parse(line);
+          if (ev.type === 'stage') {
+            setCurrentStage(ev.stage === 'extract' ? 1 : ev.stage === 'reading' ? 2 : 3);
+            setProgress((p) => ({
+              ...p,
+              stage: ev.stage,
+              pages: ev.pages ?? p.pages,
+              percent: ev.stage === 'reading' ? 6 : ev.stage === 'writing' ? Math.max(p.percent, 10) : p.percent,
+            }));
+          } else if (ev.type === 'progress') {
+            setCurrentStage(3);
+            setProgress((p) => ({
+              ...p,
+              stage: 'writing',
+              percent: ev.percent,
+              etaSeconds: ev.etaSeconds,
+              sectionsDone: ev.sectionsDone,
+            }));
+          } else if (ev.type === 'result') {
+            result = ev.data;
+          } else if (ev.type === 'error') {
+            throw new Error(ev.error || t.errorApiFailure);
+          }
+        }
+      }
+
+      if (!result) throw new Error(t.errorApiFailure);
+      setProgress((p) => ({ ...p, percent: 100, etaSeconds: 0 }));
       setIsAnalyzing(false);
       onAnalysisComplete(result, fileBase64);
     } catch (err: any) {
-      clearTimeout(timer1);
-      clearTimeout(timer2);
       setIsAnalyzing(false);
       console.error('Analysis error:', err);
       setErrorMessage(err.message || t.errorApiFailure);
     }
+  };
+
+  const formatDuration = (seconds: number) => {
+    const m = Math.floor(seconds / 60);
+    const sec = seconds % 60;
+    if (language === 'ar') return m > 0 ? `${m} دقيقة${sec >= 30 ? ' ونصف' : ''}` : `${sec} ثانية`;
+    return m > 0 ? `${m} min${sec >= 30 ? ' 30 s' : ''}` : `${sec} s`;
   };
 
   return (
@@ -215,6 +270,35 @@ export const UploadPage: React.FC<UploadPageProps> = ({
               : language === 'ar'
                 ? `محرك التحليل: Gemini (${engine.model})`
                 : `Analysis engine: Gemini (${engine.model})`}
+          </div>
+        )}
+        {engine?.provider === 'ollama' && engine.ready && (engine.models?.length ?? 0) > 1 && (
+          <div className="mt-3 flex items-center justify-center gap-2 text-xs text-slate-600 dark:text-slate-300">
+            <label htmlFor="model-picker" className="font-semibold">
+              {isAr ? 'النموذج:' : 'Model:'}
+            </label>
+            <select
+              id="model-picker"
+              value={selectedModel || engine.model}
+              disabled={isAnalyzing}
+              onChange={(e) => {
+                setSelectedModel(e.target.value);
+                try {
+                  localStorage.setItem('papermind_model', e.target.value);
+                } catch {
+                  /* storage unavailable */
+                }
+              }}
+              className="px-2 py-1 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800"
+            >
+              {engine.models!.map((m) => (
+                <option key={m} value={m}>
+                  {m}
+                  {/(:|-)(0\.5|1\.5|1|3|4)b/i.test(m) ? (isAr ? ' — أسرع' : ' — faster') : ''}
+                  {/(:|-)(7|8|9|14)b/i.test(m) ? (isAr ? ' — أدق وأبطأ' : ' — more accurate, slower') : ''}
+                </option>
+              ))}
+            </select>
           </div>
         )}
       </div>
@@ -314,22 +398,28 @@ export const UploadPage: React.FC<UploadPageProps> = ({
                 <div className="flex items-center justify-between text-sm font-semibold text-[#3F3D9E] dark:text-indigo-300">
                   <span className="flex items-center gap-2">
                     <RefreshCw className="w-4 h-4 animate-spin text-[#14B8A6]" />
-                    {currentStage === 1 && t.stages.stage1}
-                    {currentStage === 2 && t.stages.stage2}
-                    {currentStage === 3 && t.stages.stage3}
+                    {progress.stage === 'extract' && t.stages.stage1}
+                    {progress.stage === 'reading' &&
+                      (isAr
+                        ? `النموذج يقرأ الورقة${progress.pages ? ` (${progress.pages} صفحات)` : ''}…`
+                        : `The model is reading the paper${progress.pages ? ` (${progress.pages} pages)` : ''}…`)}
+                    {progress.stage === 'writing' &&
+                      (isAr
+                        ? `جارِ كتابة التحليل — القسم ${Math.min(10, progress.sectionsDone + 1)} من 10`
+                        : `Writing the analysis — section ${Math.min(10, progress.sectionsDone + 1)} of 10`)}
                   </span>
-                  <span className="text-xs font-bold text-slate-500">
-                    {currentStage} / 3
+                  <span className="text-sm font-extrabold text-[#3F3D9E] dark:text-indigo-300 tabular-nums">
+                    {progress.percent}%
                   </span>
                 </div>
 
                 {/* Progress bar */}
                 <div className="w-full bg-slate-200 dark:bg-slate-700 h-2.5 rounded-full overflow-hidden">
                   <div
-                    className="h-full bg-gradient-to-r from-[#3F3D9E] to-[#14B8A6] rounded-full transition-all duration-700 ease-out"
-                    style={{
-                      width: currentStage === 1 ? '30%' : currentStage === 2 ? '65%' : '92%',
-                    }}
+                    className={`h-full bg-gradient-to-r from-[#3F3D9E] to-[#14B8A6] rounded-full transition-all duration-700 ease-out ${
+                      progress.stage === 'reading' ? 'animate-pulse' : ''
+                    }`}
+                    style={{ width: `${progress.percent}%` }}
                   />
                 </div>
 
@@ -363,16 +453,27 @@ export const UploadPage: React.FC<UploadPageProps> = ({
 
                 {/* Elapsed time, with a reassurance note for the local engine */}
                 <div className="flex flex-wrap items-center justify-between gap-2 pt-1 text-xs text-slate-500 dark:text-slate-400">
-                  <span className="font-mono tabular-nums" dir="ltr">
-                    {Math.floor(elapsed / 60)}:{String(elapsed % 60).padStart(2, '0')}
-                  </span>
-                  {engine?.provider === 'ollama' && elapsed >= 20 && (
-                    <span>
-                      {isAr
-                        ? 'التحليل يعمل على جهازك؛ قد يستغرق من 2 إلى 15 دقيقة حسب قوة الجهاز. لا تغلق البرنامج.'
-                        : 'The analysis runs on your computer; it can take 2–15 minutes depending on your hardware. Keep the app open.'}
+                  <span className="tabular-nums">
+                    {isAr ? 'المنقضي: ' : 'Elapsed: '}
+                    <span className="font-mono" dir="ltr">
+                      {Math.floor(elapsed / 60)}:{String(elapsed % 60).padStart(2, '0')}
                     </span>
-                  )}
+                  </span>
+                  <span className="font-semibold text-[#3F3D9E] dark:text-indigo-300">
+                    {progress.stage === 'writing' && progress.etaSeconds != null
+                      ? isAr
+                        ? `المتبقي تقريباً: ${formatDuration(progress.etaSeconds)}`
+                        : `About ${formatDuration(progress.etaSeconds)} left`
+                      : progress.stage === 'reading' && engine?.provider === 'ollama' && elapsed >= 20
+                        ? isAr
+                          ? 'قراءة الورقة قد تستغرق بضع دقائق على الأجهزة بدون كارت شاشة'
+                          : 'Reading can take a few minutes on computers without a graphics card'
+                        : progress.stage === 'writing'
+                          ? isAr
+                            ? 'جارِ حساب الوقت المتبقي…'
+                            : 'Estimating time left…'
+                          : ''}
+                  </span>
                 </div>
               </div>
             )}

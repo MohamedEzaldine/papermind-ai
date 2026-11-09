@@ -84,6 +84,13 @@ export const AskPaperDrawer: React.FC<AskPaperDrawerProps> = ({
           language,
           question: textToSend,
           messages: chatHistory.map((m) => ({ role: m.role, text: m.text })),
+          model: (() => {
+            try {
+              return localStorage.getItem('papermind_model') || undefined;
+            } catch {
+              return undefined;
+            }
+          })(),
         }),
       });
 

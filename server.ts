@@ -8,9 +8,12 @@ import {
   OLLAMA_HOST,
   OLLAMA_MODEL,
   OllamaModelMissingError,
+  type OllamaMessage,
   OllamaUnavailableError,
   ollamaChat,
   ollamaStatus,
+  ollamaWarmup,
+  contextFor,
   paperAsText,
   toJsonSchema,
 } from './server/ollama';
@@ -19,6 +22,22 @@ dotenv.config();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+/**
+ * Estimate how much of the 10-section analysis JSON has been written (0..1),
+ * from the text generated so far: completed sections plus points in the current one.
+ */
+function estimateProgress(partialJson: string): number {
+  const sectionStarts = [...partialJson.matchAll(/"id"\s*:/g)];
+  if (sectionStarts.length === 0) {
+    // Still writing the overview (title, authors, summary).
+    return Math.min(0.05, partialJson.length / 12000);
+  }
+  const current = partialJson.slice(sectionStarts[sectionStarts.length - 1].index);
+  const pointsInCurrent = (current.match(/"text"\s*:/g) || []).length;
+  const done = sectionStarts.length - 1 + Math.min(pointsInCurrent / 3, 0.9);
+  return Math.min(0.99, 0.05 + 0.95 * (done / 10));
+}
 
 async function startServer() {
   const app = express();
@@ -145,6 +164,8 @@ async function startServer() {
   app.get('/api/health', async (_req, res) => {
     if (PROVIDER === 'ollama') {
       const st = await ollamaStatus();
+      // Load the model into memory while the user picks a file, so analysis starts sooner.
+      if (st.running && st.modelInstalled) void ollamaWarmup(st.model);
       return res.json({ provider: 'ollama', ready: st.running && st.modelInstalled, ...st });
     }
     return res.json({ provider: 'gemini', model: MODEL, ready: !!process.env.GEMINI_API_KEY });
@@ -152,11 +173,34 @@ async function startServer() {
 
   // API Route: Analyze PDF
   app.post('/api/analyze', async (req, res) => {
+    // With { stream: true } the response is NDJSON: progress events while the model works,
+    // then one {type:"result"} or {type:"error"} event. Otherwise a single JSON response.
+    const wantsStream = req.body?.stream === true;
+    let heartbeat: ReturnType<typeof setInterval> | undefined;
+    const send = (event: object) => {
+      if (wantsStream && !res.writableEnded) res.write(JSON.stringify(event) + '\n');
+    };
+    const fail = (status: number, error: string, detail?: string) => {
+      clearInterval(heartbeat);
+      if (wantsStream) {
+        send({ type: 'error', error });
+        return res.end();
+      }
+      return res.status(status).json({ error, detail });
+    };
+    if (wantsStream) {
+      res.setHeader('Content-Type', 'application/x-ndjson; charset=utf-8');
+      res.setHeader('Cache-Control', 'no-cache');
+      res.flushHeaders();
+      // Keep the connection visibly alive while the model reads the paper (no output yet).
+      heartbeat = setInterval(() => send({ type: 'heartbeat' }), 15000);
+    }
+
     try {
-      const { pdfBase64, language = 'ar', fileName = 'paper.pdf', fileSize = 'Unknown' } = req.body;
+      const { pdfBase64, language = 'ar', fileName = 'paper.pdf', fileSize = 'Unknown', model: requestedModel } = req.body;
 
       if (!pdfBase64) {
-        return res.status(400).json({ error: 'Missing PDF base64 data' });
+        return fail(400, 'Missing PDF base64 data');
       }
 
       // Clean base64 string if data URI prefix is present
@@ -165,13 +209,15 @@ async function startServer() {
       const isArabic = language === 'ar';
 
       if (PROVIDER === 'gemini' && !process.env.GEMINI_API_KEY) {
-        return res.status(503).json({
-          error: isArabic
+        return fail(
+          503,
+          isArabic
             ? 'لم يتم إعداد مفتاح Gemini على الخادم بعد. يرجى التواصل مع مسؤول التطبيق.'
-            : 'The Gemini API key is not configured on the server yet. Please contact the app administrator.',
-        });
+            : 'The Gemini API key is not configured on the server yet. Please contact the app administrator.'
+        );
       }
 
+      send({ type: 'stage', stage: 'extract' });
       // Extract the real text of every page so the AI's evidence can be verified afterwards.
       let paperText: PaperText | null = null;
       try {
@@ -180,11 +226,12 @@ async function startServer() {
         console.warn('PDF text extraction failed; evidence verification skipped:', e);
       }
       if (paperText && paperText.rawCharCount < 200) {
-        return res.status(422).json({
-          error: isArabic
+        return fail(
+          422,
+          isArabic
             ? 'يبدو أن هذا الملف ممسوح ضوئياً (صور بدون نص قابل للقراءة). يرجى رفع نسخة PDF نصية من الورقة.'
-            : 'This PDF looks scanned (images without selectable text). Please upload a text-based PDF of the paper.',
-        });
+            : 'This PDF looks scanned (images without selectable text). Please upload a text-based PDF of the paper.'
+        );
       }
 
       const systemInstruction = `You are an elite academic peer reviewer and research scientist in the PaperMind AI system.
@@ -219,6 +266,7 @@ CRITICAL INSTRUCTIONS:
       let rawJson: string | undefined;
       let truncatedNote: { truncated: boolean; pagesIncluded: number } | undefined;
       let engineName = `Gemini · ${MODEL}`;
+      let engineStats: object | undefined;
 
       if (PROVIDER === 'ollama') {
         if (!paperText) {
@@ -227,22 +275,48 @@ CRITICAL INSTRUCTIONS:
         // Local models cannot read PDFs, so they get the extracted text with [Page N] markers.
         const paper = paperAsText(paperText.rawPages);
         truncatedNote = { truncated: paper.truncated, pagesIncluded: paper.pagesIncluded };
+        const system =
+          systemInstruction.replace('the attached research paper PDF', 'the research paper text below') +
+          '\n8. The paper text is split by [Page N] markers. Use those numbers as page numbers.' +
+          '\n9. Be concise to keep the analysis fast: give 2 or 3 strong points per section, each point one sentence (max 30 words), and a short quote (max 20 words). Return only JSON matching the schema.';
+        const user = `${promptText}\n\n=== PAPER TEXT ===${paper.text}`;
+
+        send({ type: 'stage', stage: 'reading', pages: paper.pagesIncluded });
+        let firstTokenAt = 0;
+        let lastSent = 0;
         const local = await ollamaChat(
           [
-            {
-              role: 'system',
-              content:
-                systemInstruction.replace('the attached research paper PDF', 'the research paper text below') +
-                '\n8. The paper text is split by [Page N] markers. Use those numbers as page numbers.' +
-                '\n9. Be concise: give 2 to 4 strong points per section, each 1-2 sentences, with a short quote. Return only JSON matching the schema.',
-            },
-            { role: 'user', content: `${promptText}\n\n=== PAPER TEXT ===${paper.text}` },
+            { role: 'system', content: system },
+            { role: 'user', content: user },
           ],
-          toJsonSchema(analysisResponseSchema)
+          toJsonSchema(analysisResponseSchema),
+          {
+            model: requestedModel,
+            numCtx: contextFor(system.length + user.length, 3000),
+            onProgress: (textSoFar) => {
+              const now = Date.now();
+              if (!firstTokenAt) {
+                firstTokenAt = now;
+                send({ type: 'stage', stage: 'writing' });
+              }
+              if (now - lastSent < 1000) return;
+              lastSent = now;
+              const fraction = estimateProgress(textSoFar);
+              const genSeconds = (now - firstTokenAt) / 1000;
+              send({
+                type: 'progress',
+                percent: Math.min(99, Math.round(10 + 89 * fraction)),
+                etaSeconds: fraction > 0.06 && genSeconds > 10 ? Math.round((genSeconds / fraction) * (1 - fraction)) : null,
+                sectionsDone: Math.max(0, Math.min(10, Math.floor(fraction * 10))),
+              });
+            },
+          }
         );
         rawJson = local.text;
         engineName = `Ollama · ${local.model}`;
+        engineStats = local.stats;
       } else {
+        send({ type: 'stage', stage: 'reading' });
         const response = await ai.models.generateContent({
           model: MODEL,
           contents: [
@@ -304,8 +378,14 @@ CRITICAL INSTRUCTIONS:
         pageCount: paperText?.pages.length,
         engine: engineName,
         truncatedAfterPage: truncatedNote?.truncated ? truncatedNote.pagesIncluded : undefined,
+        engineStats,
       };
 
+      clearInterval(heartbeat);
+      if (wantsStream) {
+        send({ type: 'result', data: result });
+        return res.end();
+      }
       return res.json(result);
     } catch (err: any) {
       console.error('Analysis error:', err);
@@ -323,14 +403,14 @@ CRITICAL INSTRUCTIONS:
           : 'Service rate limit reached. Please wait a moment and try again.';
       }
 
-      return res.status(500).json({ error: message, detail: err.message });
+      return fail(500, message, err.message);
     }
   });
 
   // API Route: Ask the Paper (Q&A)
   app.post('/api/chat', async (req, res) => {
     try {
-      const { pdfBase64, language = 'ar', question, messages = [] } = req.body;
+      const { pdfBase64, language = 'ar', question, messages = [], model: requestedModel } = req.body;
 
       if (!question) {
         return res.status(400).json({ error: 'Question is required' });
@@ -388,13 +468,17 @@ RULES:
           );
           paperBlock = `\n\nThe paper text is split by [Page N] markers; cite those page numbers.\n=== PAPER TEXT ===${paperAsText(extracted.rawPages).text}`;
         }
-        const local = await ollamaChat([
+        const chatMessages: OllamaMessage[] = [
           { role: 'system', content: systemInstruction.replace('uploaded research paper PDF', 'research paper text below') + paperBlock },
           ...history
             .filter((m: any) => m?.text)
             .map((m: any) => ({ role: m.role === 'model' ? ('assistant' as const) : ('user' as const), content: String(m.text) })),
           { role: 'user', content: question },
-        ]);
+        ];
+        const local = await ollamaChat(chatMessages, undefined, {
+          model: requestedModel,
+          numCtx: contextFor(chatMessages.reduce((n, m) => n + m.content.length, 0), 1200),
+        });
         replyText = local.text;
       } else {
         const response = await ai.models.generateContent({
