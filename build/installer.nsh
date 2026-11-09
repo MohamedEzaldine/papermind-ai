@@ -4,9 +4,12 @@
 ;   2. download the AI model, showing progress inside the installer window
 ; This file is UTF-8 with BOM so NSIS displays the Arabic text correctly.
 
+; "auto" lets build/pull-model.ps1 pick the model that suits this computer (RAM / graphics card).
 !ifndef OLLAMA_MODEL
-  !define OLLAMA_MODEL "qwen2.5:7b"
+  !define OLLAMA_MODEL "auto"
 !endif
+; Used only by the fallback when the script fails.
+!define FALLBACK_MODEL "qwen2.5:3b"
 
 ; Show the progress list by default, so users can see the model download advancing.
 !macro customHeader
@@ -37,7 +40,7 @@
   ollama_present:
 
   ; Download the model in the background; progress lines appear in the installer's list.
-  DetailPrint "جارِ تنزيل نموذج الذكاء الاصطناعي (${OLLAMA_MODEL})، قد يستغرق ذلك عدة دقائق... / Downloading the AI model, this can take several minutes..."
+  DetailPrint "جارِ اختيار وتنزيل نموذج الذكاء الاصطناعي المناسب لجهازك، قد يستغرق ذلك عدة دقائق... / Choosing and downloading the right AI model for this computer..."
   InitPluginsDir
   File "/oname=$PLUGINSDIR\pull-model.ps1" "${PROJECT_DIR}\build\pull-model.ps1"
   nsExec::ExecToLog 'powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "$PLUGINSDIR\pull-model.ps1" -Model "${OLLAMA_MODEL}" -OllamaExe "$0"'
@@ -45,7 +48,7 @@
   StrCmp $1 "0" model_ready 0
     ; Fallback: pull directly with the Ollama command line (still hidden).
     DetailPrint "محاولة أخرى لتنزيل النموذج... / Retrying the model download..."
-    nsExec::ExecToLog '"$0" pull ${OLLAMA_MODEL}'
+    nsExec::ExecToLog '"$0" pull ${FALLBACK_MODEL}'
     Pop $1
     StrCmp $1 "0" model_ready 0
       MessageBox MB_ICONEXCLAMATION|MB_OK "لم يكتمل تنزيل نموذج الذكاء الاصطناعي. تأكد من اتصال الإنترنت ثم أعد تشغيل برنامج التثبيت.$\r$\nThe AI model download did not finish. Check your internet connection and run the installer again."

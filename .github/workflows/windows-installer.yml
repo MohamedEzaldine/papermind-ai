@@ -39,8 +39,9 @@ jobs:
           npm run lint
           npm test
 
-      - name: Build installer (.exe)
-        run: npm run dist:win
+      - name: Build installer (.exe) (retries on network errors)
+        shell: bash
+        run: npm run dist:win || (sleep 60 && npm run dist:win) || (sleep 180 && npm run dist:win)
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: false
 

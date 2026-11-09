@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import { Language, AnalysisResult } from '../types';
 import { translations } from '../locales/translations';
+import { AnalysisModePicker } from './AnalysisModePicker';
 
 interface UploadPageProps {
   language: Language;
@@ -258,12 +259,12 @@ export const UploadPage: React.FC<UploadPageProps> = ({
             {engine.provider === 'ollama'
               ? language === 'ar'
                 ? engine.ready
-                  ? `يعمل محلياً على جهازك (Ollama · ${engine.model}) — قد يستغرق التحليل عدة دقائق`
+                  ? `يعمل محلياً على جهازك (Ollama · ${selectedModel || engine.model})`
                   : engine.running === false
                   ? 'محرك الذكاء الاصطناعي المحلي (Ollama) لا يعمل — افتحه من قائمة ابدأ'
                   : `لا يوجد نموذج مثبت في Ollama — ثبّت ${engine.model}`
                 : engine.ready
-                  ? `Running locally on your device (Ollama · ${engine.model}) — analysis may take a few minutes`
+                  ? `Running locally on your device (Ollama · ${selectedModel || engine.model})`
                   : engine.running === false
                     ? 'The local AI engine (Ollama) is not running — open it from the Start menu'
                     : `No model installed in Ollama — install ${engine.model}`
@@ -272,34 +273,20 @@ export const UploadPage: React.FC<UploadPageProps> = ({
                 : `Analysis engine: Gemini (${engine.model})`}
           </div>
         )}
-        {engine?.provider === 'ollama' && engine.ready && (engine.models?.length ?? 0) > 1 && (
-          <div className="mt-3 flex items-center justify-center gap-2 text-xs text-slate-600 dark:text-slate-300">
-            <label htmlFor="model-picker" className="font-semibold">
-              {isAr ? 'النموذج:' : 'Model:'}
-            </label>
-            <select
-              id="model-picker"
-              value={selectedModel || engine.model}
-              disabled={isAnalyzing}
-              onChange={(e) => {
-                setSelectedModel(e.target.value);
-                try {
-                  localStorage.setItem('papermind_model', e.target.value);
-                } catch {
-                  /* storage unavailable */
-                }
-              }}
-              className="px-2 py-1 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800"
-            >
-              {engine.models!.map((m) => (
-                <option key={m} value={m}>
-                  {m}
-                  {/(:|-)(0\.5|1\.5|1|3|4)b/i.test(m) ? (isAr ? ' — أسرع' : ' — faster') : ''}
-                  {/(:|-)(7|8|9|14)b/i.test(m) ? (isAr ? ' — أدق وأبطأ' : ' — more accurate, slower') : ''}
-                </option>
-              ))}
-            </select>
-          </div>
+        {engine?.provider === 'ollama' && (
+          <AnalysisModePicker
+            language={language}
+            disabled={isAnalyzing}
+            selectedModel={selectedModel}
+            onSelect={(m) => {
+              setSelectedModel(m);
+              try {
+                localStorage.setItem('papermind_model', m);
+              } catch {
+                /* storage unavailable */
+              }
+            }}
+          />
         )}
       </div>
 

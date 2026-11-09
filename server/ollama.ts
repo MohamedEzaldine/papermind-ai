@@ -130,10 +130,17 @@ async function installedModels(): Promise<string[]> {
 const sameModel = (a: string, b: string) =>
   a === b || a === `${b}:latest` || `${a}:latest` === b;
 
-/** Pick the model to use: the requested one if installed, else the preferred one, else the best installed chat model. */
+/** Models preferred for this computer (set at startup from the detected hardware). */
+let hardwarePreference: string[] = [];
+export function setPreferredModels(models: string[]) {
+  hardwarePreference = models;
+}
+
+/** Pick the model to use: the requested one if installed, else the best match for this computer, else any installed chat model. */
 export async function resolveModel(requested?: string): Promise<string> {
   const models = await installedModels();
-  for (const want of requested ? [requested, ...PREFERRED_MODELS] : PREFERRED_MODELS) {
+  const order = [...(requested ? [requested] : []), ...(process.env.OLLAMA_MODEL ? [OLLAMA_MODEL] : []), ...hardwarePreference, ...PREFERRED_MODELS];
+  for (const want of order) {
     const hit = models.find((m) => sameModel(m, want));
     if (hit) return hit;
   }
@@ -143,6 +150,32 @@ export async function resolveModel(requested?: string): Promise<string> {
 }
 
 const chatModels = (models: string[]) => models.filter((m) => !/embed|bge|minilm|nomic|vision|llava/i.test(m));
+
+/** Is this model installed in Ollama? */
+export async function isInstalled(model: string): Promise<boolean> {
+  const models = await installedModels();
+  return models.some((m) => sameModel(m, model));
+}
+
+/**
+ * Download a model through Ollama, reporting progress (0-100) of the main model file.
+ * Resolves when Ollama confirms success.
+ */
+export async function ollamaPull(model: string, onProgress: (percent: number, doneMB: number, totalMB: number) => void): Promise<void> {
+  let ok = false;
+  let error = '';
+  const r = await request('/api/pull', { name: model, stream: true }, (line) => {
+    const msg = JSON.parse(line);
+    if (msg.error) error = msg.error;
+    if (msg.total && msg.completed && msg.total > 50 * 1024 * 1024) {
+      onProgress(Math.floor((msg.completed / msg.total) * 100), Math.round(msg.completed / 1048576), Math.round(msg.total / 1048576));
+    }
+    if (msg.status === 'success') ok = true;
+  });
+  if (r.status !== 200) throw new Error(`Ollama error ${r.status}: ${r.text}`);
+  if (error) throw new Error(error);
+  if (!ok) throw new Error('Download ended without confirmation');
+}
 
 /** Report whether Ollama is running, which model would be used, and which chat models exist. */
 export async function ollamaStatus(): Promise<{ running: boolean; modelInstalled: boolean; model: string; models: string[] }> {

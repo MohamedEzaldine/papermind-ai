@@ -2,7 +2,8 @@
 # Run by the installer through nsExec::ExecToLog, so every line printed here appears in
 # the installer's progress list. Output is kept ASCII so it displays correctly there.
 param(
-  [Parameter(Mandatory = $true)][string]$Model,
+  # "auto" picks the model that suits this computer (same rules as the app, see server/hardware.ts).
+  [string]$Model = "auto",
   [string]$OllamaExe = "ollama",
   [string]$OllamaHost = "http://127.0.0.1:11434"
 )
@@ -16,6 +17,22 @@ function Test-Ollama {
   } catch {
     return $false
   }
+}
+
+# 0. Choose the model for this computer: a graphics card with 6+ GB and 12+ GB RAM -> accurate (7B),
+#    8+ GB RAM -> balanced (3B), otherwise fast (1.5B). Without a GPU, larger models are far too slow.
+if ($Model -eq "auto") {
+  $ramGB = 0
+  try { $ramGB = [math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1GB, 1) } catch {}
+  $vramGB = 0
+  try {
+    $smi = & nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>$null
+    if ($LASTEXITCODE -eq 0 -and $smi) { $vramGB = [math]::Round([double](($smi | Select-Object -First 1).Trim()) / 1024, 1) }
+  } catch {}
+  if ($vramGB -ge 6 -and $ramGB -ge 12) { $Model = "qwen2.5:7b"; $mode = "accurate" }
+  elseif ($ramGB -ge 8) { $Model = "qwen2.5:3b"; $mode = "balanced" }
+  else { $Model = "qwen2.5:1.5b"; $mode = "fast" }
+  Write-Output ("This computer: {0} GB RAM, graphics memory {1} GB -> {2} mode ({3})" -f $ramGB, $vramGB, $mode, $Model)
 }
 
 # 1. Make sure the Ollama service is running.

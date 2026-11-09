@@ -4,6 +4,7 @@ import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 import { GoogleGenAI, Type } from '@google/genai';
 import { extractPaperText, checkPoint, PaperText } from './server/evidence';
+import { TIERS, detectHardware, preferredModels, recommendTier } from './server/hardware';
 import {
   OLLAMA_HOST,
   OLLAMA_MODEL,
@@ -13,6 +14,9 @@ import {
   ollamaChat,
   ollamaStatus,
   ollamaWarmup,
+  ollamaPull,
+  isInstalled,
+  setPreferredModels,
   contextFor,
   paperAsText,
   toJsonSchema,
@@ -59,7 +63,12 @@ async function startServer() {
         ? 'gemini'
         : 'ollama';
   if (PROVIDER === 'ollama') {
-    console.log(`AI provider: local Ollama (${OLLAMA_MODEL} at ${OLLAMA_HOST})`);
+    console.log(`AI provider: local Ollama at ${OLLAMA_HOST}`);
+    // Prefer the model that suits this computer (GPU, RAM) unless OLLAMA_MODEL is set.
+    detectHardware().then((hw) => {
+      setPreferredModels(preferredModels(hw));
+      console.log(`Hardware: ${JSON.stringify(hw)} -> recommended mode: ${recommendTier(hw)}`);
+    });
   } else {
     console.log(`AI provider: Gemini (${MODEL})`);
     if (!process.env.GEMINI_API_KEY) {
@@ -169,6 +178,46 @@ async function startServer() {
       return res.json({ provider: 'ollama', ready: st.running && st.modelInstalled, ...st });
     }
     return res.json({ provider: 'gemini', model: MODEL, ready: !!process.env.GEMINI_API_KEY });
+  });
+
+  // API Route: analysis modes (local models) with this computer's recommendation
+  app.get('/api/models', async (_req, res) => {
+    if (PROVIDER !== 'ollama') return res.json({ provider: PROVIDER, tiers: [] });
+    const hw = await detectHardware();
+    const st = await ollamaStatus();
+    const tiers = await Promise.all(
+      TIERS.map(async (t) => ({ ...t, installed: st.running ? await isInstalled(t.model).catch(() => false) : false }))
+    );
+    return res.json({ provider: 'ollama', running: st.running, hardware: hw, recommended: recommendTier(hw), current: st.model, tiers });
+  });
+
+  // API Route: download a mode's model (NDJSON progress), only the models offered in TIERS
+  app.post('/api/models/pull', async (req, res) => {
+    const tier = TIERS.find((t) => t.id === req.body?.tier);
+    if (PROVIDER !== 'ollama' || !tier) return res.status(400).json({ error: 'Unknown mode' });
+    res.setHeader('Content-Type', 'application/x-ndjson; charset=utf-8');
+    res.flushHeaders();
+    let last = -1;
+    try {
+      await ollamaPull(tier.model, (percent, doneMB, totalMB) => {
+        if (percent !== last) {
+          last = percent;
+          res.write(JSON.stringify({ type: 'progress', percent, doneMB, totalMB }) + '\n');
+        }
+      });
+      res.write(JSON.stringify({ type: 'done', model: tier.model }) + '\n');
+    } catch (err: any) {
+      const ar = req.body?.language === 'ar';
+      res.write(
+        JSON.stringify({
+          type: 'error',
+          error:
+            ollamaErrorMessage(err, ar) ??
+            (ar ? 'تعذر تنزيل النموذج. تحقق من اتصال الإنترنت وأعد المحاولة.' : 'Could not download the model. Check your internet connection and retry.'),
+        }) + '\n'
+      );
+    }
+    res.end();
   });
 
   // API Route: Analyze PDF

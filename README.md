@@ -96,7 +96,15 @@ npm test
 
 1. It installs the app and creates Desktop and Start Menu shortcuts.
 2. If Ollama is not installed, it downloads and installs it silently.
-3. It downloads the AI model (`qwen2.5:7b`, about 4.7 GB) and shows a progress window.
+3. It checks the computer's RAM and graphics card and downloads the model that suits it, with progress shown inside the installer window.
+
+| Mode | Model | Size | Chosen automatically when |
+|---|---|---|---|
+| Fast | `qwen2.5:1.5b` | 1 GB | less than 8 GB RAM |
+| Balanced | `qwen2.5:3b` | 1.9 GB | 8 GB RAM or more, no suitable graphics card |
+| Accurate | `qwen2.5:7b` | 4.7 GB | NVIDIA GPU with 6 GB+ and 12 GB+ RAM |
+
+Users can switch modes on the upload page. A mode that is not installed yet can be downloaded from inside the app, with a progress bar. During an analysis the app shows the real percentage, the section being written, and the estimated time left.
 
 When the app starts, it launches Ollama if needed and opens PaperMind AI in its own window. The server listens only on `127.0.0.1`, so papers never leave the computer.
 
@@ -104,7 +112,7 @@ When the app starts, it launches Ollama if needed and opens PaperMind AI in its 
 
 Build it yourself on Windows with `npm ci`, then `npm run dist:win`. The output goes to `release/`. To try the desktop app without installing it, run `npm run desktop`.
 
-Requirements for the model: about 8 GB of RAM and 6 GB of free disk space. A GPU makes analysis much faster but is not required.
+Requirements: 4 GB of RAM or more and 3 to 6 GB of free disk space, depending on the mode. A graphics card makes analysis much faster but is not required.
 
 ## Deploy (free) on Render
 
